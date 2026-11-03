@@ -69,7 +69,7 @@ fn validate_release(version: &str, url: &str, arch: &str, current: &str) -> Resu
     if next <= current || !next.pre.is_empty() || !next.build.is_empty() {
         return Err("更新版本必须是高于当前版本的正式版本".into());
     }
-    let expected = format!("https://github.com/AI-AQI/music-manager/releases/download/v{version}/music-manager_{version}_{arch}.dmg");
+    let expected = format!("https://github.com/qivyn/music-manager/releases/download/v{version}/music-manager_{version}_{arch}.dmg");
     if url != expected { return Err("更新包地址与版本或设备架构不匹配".into()); }
     Ok(())
 }
@@ -272,7 +272,7 @@ mod tests {
     }
     #[test]
     fn release_must_match_version_architecture_and_repository() {
-        let url = "https://github.com/AI-AQI/music-manager/releases/download/v0.2.6/music-manager_0.2.6_aarch64.dmg";
+        let url = "https://github.com/qivyn/music-manager/releases/download/v0.2.6/music-manager_0.2.6_aarch64.dmg";
         assert!(validate_release("0.2.6", url, "aarch64", "0.2.5").is_ok());
         for (version, arch, current) in [("0.2.6", "x64", "0.2.5"), ("0.2.7", "aarch64", "0.2.5"),
             ("0.2.6", "aarch64", "0.2.6"), ("0.2.6-beta.1", "aarch64", "0.2.5")] {

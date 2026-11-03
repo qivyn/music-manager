@@ -138,6 +138,8 @@ cd src-tauri && cargo tauri dev
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
+每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。测试全部通过后，若版本号比已发布版本新，就在 Apple Silicon 和 Intel 上分别构建 DMG；推送到 `main` 时再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的提交只测试、不发布，手动运行只构建不发布。
+
 波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
 
 完整前端回归：`node --test scripts/test-*.cjs`。`scripts/test-review-regressions.cjs` 覆盖详情异步加载与连续保存、关闭编辑确认、播放取消与队列、拖入导入、失败重试、批量删除、播放历史缓存、导入专辑来源及预览生成。`src-tauri/src/commands_regression_tests.rs` 覆盖 WAV 原文件保护与完整输出、标签事务回滚、大库标签统计、专辑移动及离线资料编辑；发布流程会运行这些检查。
@@ -152,7 +154,7 @@ cd src-tauri && cargo tauri dev
 
 应用图标使用与奶油色首页一致的「蜷睡白猫与灰玫瑰色音符」，采用轻柔的奶油白和浅暖色阴影，无装饰边框、深色猫咪描边或唱片元素。插画原图为 `src-tauri/app-icon-artwork.png`，生成提示词见 [图标设计记录](docs/design/app-icon.prompt.txt)。修改插画后，在项目根目录运行 `node scripts/generate-app-icons.cjs`，通过无描边的圆角裁切生成 `src-tauri/app-icon.png`，并同步生成开发模式 Dock 和各平台打包图标。
 
-发布前同步更新 `src-tauri/Cargo.toml`、`Cargo.lock` 与 `src-tauri/tauri.conf.json` 的版本号，再创建相同版本的 `v` 标签。GitHub Actions 分别在 Apple Silicon 和 Intel runner 上测试、构建应用及图形化安装 DMG。
+发版不需要手动打标签：在合并到 `main` 的 PR 中同步更新 `src-tauri/Cargo.toml`、`Cargo.lock` 与 `src-tauri/tauri.conf.json` 的版本号，并写好 `docs/update-notes.txt` 与 `docs/release-notes.md`，合并后 CI 测试通过即自动构建两个架构、签名并发布。标签与 Release 由 CI 创建，对应通过测试的那个提交。
 
 本地从项目根目录构建（以 Apple Silicon 为例）：
 

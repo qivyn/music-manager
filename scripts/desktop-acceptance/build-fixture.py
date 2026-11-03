@@ -55,7 +55,7 @@ text = re.sub(r'let dir = std::path::PathBuf::from\(home\).*?;', 'let dir = ' + 
 p.write_text(text)
 p = rust / 'src/updater.rs'
 text = p.read_text().replace('com.musicmanager.installer', identifier + '.installer').replace('com.musicmanager.app', identifier)
-text = text.replace('https://github.com/AI-AQI/music-manager/releases/download', origin + '/releases/download')
+text = text.replace('https://github.com/qivyn/music-manager/releases/download', origin + '/releases/download')
 text = text.replace('app.path().app_cache_dir().map_err(|e| e.to_string())?', 'PathBuf::from(' + json.dumps(str(root / 'cache')) + ')')
 text = text.replace('PathBuf::from("/Applications").join(APP_NAME), home.join("Applications").join(APP_NAME)', 'PathBuf::from(' + json.dumps(str(root / 'Applications')) + ').join(APP_NAME)')
 p.write_text(text)

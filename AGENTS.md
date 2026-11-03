@@ -23,9 +23,11 @@
 | `src-tauri/src/*_tests.rs` | 后端回归测试（`commands_regression_tests.rs`、`db_upgrade_tests.rs`） |
 | `src-tauri/tests/fixtures/` | 各历史版本数据库 SQL，供升级测试使用 |
 | `scripts/test-*.cjs` | 前端 Node 测试（`node:test` + `vm` 加载 `frontend/` 源码） |
+| `scripts/release-plan.py`、`test-release-plan.py` | 发版判断：三处版本号一致、比已发布版本新、标签指向本次提交 |
+| `docs/update-notes.txt`、`docs/release-notes.md` | 应用内更新说明与 GitHub Release 正文（`{{version}}` 会被替换） |
 | `scripts/macos-installer/` | Swift 图形安装器及其测试 |
 | `scripts/desktop-acceptance/` | 隔离验收用的独立 App / DMG 构建脚本 |
-| `.github/workflows/release.yml` | 推 `v*` 标签时测试、双架构构建、签名并发布 |
+| `.github/workflows/ci.yml` | PR 与 `main` 的唯一流水线：测试 → 版本号新则双架构构建 → `main` 上自动发布 |
 
 ## 开发流程
 
@@ -70,6 +72,7 @@ node --check frontend/app.js
 node --check frontend/updater.js
 node --test scripts/test-*.cjs
 python3 scripts/test-update-manifest.py
+python3 scripts/test-release-plan.py
 (cd src-tauri && cargo test --locked --lib)
 ```
 改动安装器或打包脚本时加跑 `bash scripts/test-macos-installer.sh`。
@@ -88,13 +91,15 @@ python3 scripts/test-update-manifest.py
   - **改动**：做了什么、为什么、影响哪些模块，数据库 schema / 用户数据是否受影响。
   - **实际验证结果**：执行的命令和真实输出摘要（通过数 / 失败数）、E2E 截图或真实窗口的验证情况、构建是否成功。
   - **未验证 / 风险**：没覆盖到的场景和原因。
+- PR 会触发 `ci.yml`：前端、更新清单、发版判断、后端和安装器测试；只有在 PR 里改了版本号时才会额外做双架构构建。CI 失败时先修复，不把失败的 PR 交给用户合并；CI 只在 Apple Silicon 上跑常规后端测试，不替代本地的 E2E 和构建验证。
 - **不自动合并**：不执行 `gh pr merge`、不开启 auto-merge，由用户手动合并。
-- 不推送 `v*` 标签：标签会触发 `release.yml` 正式发布，只在用户明确要求发布时操作。
+- **发版由合并触发，不手动打标签**：合并到 `main` 后 `ci.yml` 自动运行，测试通过且版本号比已发布版本新时，构建两个架构、签名并创建 tag 与 Release；版本号没变则只测试、不发布。`workflow_dispatch` 只测试并构建 DMG，不发布。
+- 只有用户要求发版时才改版本号；发版同时要写 `docs/update-notes.txt` 和 `docs/release-notes.md`，CI 会检查两份说明都包含 `v<版本号>`。
 
 ## 必须遵守的约束
 
 - **不碰用户真实数据**：开发和测试不读写 `~/Library/Application Support/com.musicmanager.app/` 下的正式配置与 `library.db`，也不修改用户的原始音频文件。测试用临时目录；真实窗口验收用独立 identifier（参照 `scripts/desktop-acceptance/build-fixture.py`）。
 - **数据安全**：删除音乐或片段只删记录，不删音频文件。数据库升级必须先备份、在单个事务中迁移并校验，失败整体回滚；音乐库不可用时等待重试，不创建替代空库。
 - **前端不引入 npm 包或构建步骤**，保持原生 JS；第三方代码放在 `frontend/vendor/`。
-- **版本号**：发布时同步修改 `src-tauri/Cargo.toml`、`Cargo.lock`、`src-tauri/tauri.conf.json`，CI 会校验三者与标签一致。普通功能修改不要改版本号。
+- **版本号**：发版时同步修改 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json`，CI 会校验三者一致，并据此判断是否发布。普通功能修改不要改版本号。
 - 改了用户可见的行为、命令或测试入口时，同步更新 `README.md`。
