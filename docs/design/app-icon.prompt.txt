@@ -1,0 +1,27 @@
+App icon: softly painted sleeping white cat with a dusty-rose musical note
+Generator: built-in image_gen edits of the previous cat-and-note icon.
+User direction: no records/discs, no blue palette, no heavy cat outline, no large frame.
+Artwork source: src-tauri/app-icon-artwork.png (opaque full-bleed cream painting)
+Platform master: src-tauri/app-icon.png (1024px, transparent outside native rounded corners)
+Palette: ivory #fffaf2, cream #faf3e9, pale beige #e6d9cc / #eee3d8,
+         dusty rose #b4818a, fine warm-gray eyes #917c74.
+
+Regenerate platform files from the project root:
+node scripts/generate-app-icons.cjs
+The exporter applies a stroke-free rounded clip to the generated artwork.
+It adds no frame, border, shadow, or outline to the illustration.
+
+SOFTENING EDIT PROMPT
+Use case: precise-object-edit / desktop app icon.
+Correct the supplied icon according to this exact user feedback: the cat's outline/shadows are much too heavy, and the large perimeter frame is unwanted.
+Make these two changes clearly visible:
+1. REMOVE the entire dusty-rose border/frame around the tile. Replace that whole band with the same uninterrupted pale warm cream as the tile interior. The rounded square must be completely borderless: no stroke, no colored rim, no inner line, no bevel, no decorative frame, no drop shadow around the tile. Its outer silhouette remains a clean smoothly rounded cream square with transparent padding outside.
+2. Repaint the cat's heavy brown edge shading into extremely light soft cream-beige washes. No drawn contour line around the back, face, paws or tail. No dark bands in fur folds. Reduce the current brown shading intensity by about 80 percent. White fur should feel luminous, airy, delicate, almost blending with the cream paper; describe volume using broad pale warm gray-beige tonal transitions and a few subtle painterly marks, never an outline. Under the cat use only a barely visible diffuse contact shadow. Keep the closed eyes as fine warm gray short curves, thinner and lighter than the input. Light blush ears and nose.
+Preserve the exact sleeping curled white cat identity and pose, composition, tail shape, the single muted dusty-rose beamed musical-note symbol at upper left, and gentle hand-painted illustration style. Note should remain clearly legible. Palette: warm ivory #fffaf2 and cream #faf3e9; faint fur shadows around #e6d9cc and #eee3d8, note #b4818a, fine eyes #917c74. Absolutely no blue/purple, record/disc elements, extra objects, text or watermark.
+This should look like the delicate cream sleeping-cat home illustration, NOT a heavily outlined mascot or framed badge. The cream tile is opaque, with a completely clean antialiased outer edge and actual transparent space outside; no cream splatters or floating pixels. Square image.
+
+FINAL ARTWORK EXPORT PROMPT
+Prepare this exact delicate sleeping-cat-and-dusty-rose-note illustration as an opaque square source artwork for a desktop icon exporter.
+Keep the cat, note, pale shading and colors exactly as in the supplied image. The user wants NO border/frame and NO heavy outlines. Do not darken the cat. Do not add any border.
+Replace ALL transparent space and stray edge flecks with perfectly smooth pale warm cream #faf3e9. Extend the interior cream background continuously to all four image edges and every corner. REMOVE the rounded tile silhouette entirely; the output is a full-bleed 1024x1024 square painting on a uniform opaque cream background with no separate card or border inside it. The asset pipeline will handle native icon corners, so do NOT draw any rounded rectangle, frame, stroke, perimeter line, shadow, rim or container.
+Preserve the illustration placement and size, luminous ivory cat, extremely faint warm beige shading, thin light warm-gray closed eyes, blush ears and the single dusty-rose beamed note at upper left. No blue/purple, no vinyl record/disc, no lettering, no added decorations. Opaque full-bleed cream background, no alpha, no checkerboard.

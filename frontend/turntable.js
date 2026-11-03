@@ -117,16 +117,17 @@
     }
 
     function miniSetCover(dataUrl) {
+        const revision = mini.coverRevision = (mini.coverRevision || 0) + 1;
         if (!dataUrl) { mini.cover = null; miniDrawDisc(); miniKick(); return; }
         const img = new Image();
-        img.onload = () => { mini.cover = img; miniDrawDisc(); miniKick(); };
+        img.onload = () => { if (revision === mini.coverRevision) { mini.cover = img; miniDrawDisc(); miniKick(); } };
         img.src = dataUrl;
     }
 
     /* =========================================================
        大唱机（Three.js，首页）
-       造型参照复古台式唱机：木框 + 黑色台面、烟熏防尘盖、
-       金属边转盘、S 形唱臂、前立面拉丝面板 + 实体旋钮
+       浅粉桌面唱机 / 奶油复古唱机，两套独立机身与控制面板；
+       纯色页面上以近景展示唱盘、唱臂和细腻的烤漆表面。
     ========================================================== */
 
     const FAKE_PEAKS = new Float32Array(720);
@@ -141,82 +142,157 @@
     let hasIntro = false;
     let hasDived = false;
     let pendingStats = null;
+    let playbackHandler = null;
     let emptyDropHandler = null;   // 空落针时由应用侧决定放哪张；返回 true 表示已接管
     let lastTrackInfo = { title: "", artist: "" };
+    let trackRevision = 0;
+    let coverRevision = 0;
+    let pendingTrack = null;
 
-    // 标签配色：档案室=暖琥珀（参考图的橙标），云雾=玫瑰粉
-    const LABEL_COLORS = { archive: ["#e08a3c", "#a85f1c"], sky: ["#e98aa6", "#c95d7d"] };
+    const LABEL_COLORS = { archive: ["#eee4cf", "#c5ab7f"], sky: ["#f2e9e5", "#cdb8bc"] };
 
     /* ---------------- 程序化贴图 ---------------- */
 
-    function makeWoodTexture(mode) {
-        const c = document.createElement("canvas");
-        c.width = c.height = 512;
-        const x = c.getContext("2d");
-        const g = x.createLinearGradient(0, 0, 512, 512);
-        if (mode === "light") {
-            // 云雾主题：白蜡木（去黄低饱和，和粉透彩胶同家族）
-            g.addColorStop(0, "#efe4d6");
-            g.addColorStop(.5, "#e6d8c5");
-            g.addColorStop(1, "#d9c8b0");
-        } else if (mode) {
-            g.addColorStop(0, "#4a2f1a");
-            g.addColorStop(.5, "#38220f");
-            g.addColorStop(1, "#2a1809");
-        } else {
-            g.addColorStop(0, "#6b4a2f");
-            g.addColorStop(1, "#4a2f1a");
-        }
-        x.fillStyle = g;
-        x.fillRect(0, 0, 512, 512);
-        const grainA = mode === "light" ? "168,148,120" : "16,9,4";
-        const grainB = mode === "light" ? "255,250,240" : "132,92,52";
-        for (let i = 0; i < 110; i++) {
-            const y0 = Math.random() * 512;
-            x.strokeStyle = `rgba(${Math.random() > .5 ? grainA : grainB},${.05 + Math.random() * .08})`;
-            x.lineWidth = .6 + Math.random() * 2.4;
-            x.beginPath();
-            x.moveTo(0, y0);
-            for (let px = 0; px <= 512; px += 32) {
-                x.lineTo(px, y0 + Math.sin(px * .02 + i) * 6);
-            }
-            x.stroke();
-        }
-        const tex = new THREE.CanvasTexture(c);
-        tex.encoding = THREE.sRGBEncoding;
-        return tex;
+    // 柔光箱只用于机身与金属的环境反射，不渲染到页面背景。
+    function makeEnvTexture(renderer, scene) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1024; canvas.height = 512;
+        const ctx = canvas.getContext("2d");
+        const gradient = ctx.createLinearGradient(0, 0, 0, 512);
+        gradient.addColorStop(0, "#6c6a65");
+        gradient.addColorStop(.55, "#343638");
+        gradient.addColorStop(1, "#151719");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 1024, 512);
+        const softbox = ctx.createLinearGradient(50, 0, 310, 0);
+        softbox.addColorStop(0, "rgba(255,249,236,0)");
+        softbox.addColorStop(.2, "rgba(255,249,236,.9)");
+        softbox.addColorStop(.8, "rgba(255,249,236,.9)");
+        softbox.addColorStop(1, "rgba(255,249,236,0)");
+        ctx.fillStyle = softbox;
+        ctx.fillRect(50, 70, 260, 300);
+        ctx.fillStyle = "rgba(216,233,244,.55)";
+        ctx.fillRect(690, 120, 85, 260);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.encoding = THREE.sRGBEncoding;
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        scene.environment = pmrem.fromEquirectangular(texture).texture;
+        pmrem.dispose(); texture.dispose();
     }
 
-    // 环境反射图：暖房间，左侧一扇亮窗（金属与防尘盖反光的来源）
-    function makeEnvTexture(renderer, scene) {
-        const c = document.createElement("canvas");
-        c.width = 1024; c.height = 512;
-        const x = c.getContext("2d");
-        const g = x.createLinearGradient(0, 0, 0, 512);
-        g.addColorStop(0, "#3a2c1c");
-        g.addColorStop(.55, "#241a10");
-        g.addColorStop(1, "#120c07");
-        x.fillStyle = g;
-        x.fillRect(0, 0, 1024, 512);
-        const win = x.createRadialGradient(200, 210, 10, 200, 210, 220);
-        win.addColorStop(0, "rgba(255,222,170,.95)");
-        win.addColorStop(.4, "rgba(255,200,140,.45)");
-        win.addColorStop(1, "rgba(255,200,140,0)");
-        x.fillStyle = win;
-        x.fillRect(0, 0, 1024, 512);
-        const warm = x.createRadialGradient(820, 260, 10, 820, 260, 180);
-        warm.addColorStop(0, "rgba(255,190,120,.5)");
-        warm.addColorStop(1, "rgba(255,190,120,0)");
-        x.fillStyle = warm;
-        x.fillRect(0, 0, 1024, 512);
+    function makeBrushedTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 256;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#a8a8a8";
+        ctx.fillRect(0, 0, 256, 256);
+        for (let y = 0; y < 256; y++) {
+            const value = 148 + Math.round(Math.sin(y * 73.13) * 18);
+            ctx.fillStyle = `rgb(${value},${value},${value})`;
+            ctx.fillRect(0, y, 256, 1);
+        }
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        return texture;
+    }
 
-        const tex = new THREE.CanvasTexture(c);
-        tex.mapping = THREE.EquirectangularReflectionMapping;
-        const pmrem = new THREE.PMREMGenerator(renderer);
-        const env = pmrem.fromEquirectangular(tex).texture;
-        pmrem.dispose();
-        tex.dispose();
-        scene.environment = env;
+    function roundedBox(width, height, depth, radius = .12) {
+        radius = Math.min(radius, width * .48, depth * .48);
+        const bevel = Math.min(.03, height * .22, depth * .12);
+        const shape = new THREE.Shape();
+        const x = -width / 2, z = -depth / 2;
+        shape.moveTo(x + radius, z);
+        shape.lineTo(x + width - radius, z);
+        shape.quadraticCurveTo(x + width, z, x + width, z + radius);
+        shape.lineTo(x + width, z + depth - radius);
+        shape.quadraticCurveTo(x + width, z + depth, x + width - radius, z + depth);
+        shape.lineTo(x + radius, z + depth);
+        shape.quadraticCurveTo(x, z + depth, x, z + depth - radius);
+        shape.lineTo(x, z + radius);
+        shape.quadraticCurveTo(x, z, x + radius, z);
+        const geometry = new THREE.ExtrudeGeometry(shape, { depth: height - bevel * 2, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 3, steps: 1, curveSegments: 8 });
+        geometry.translate(0, 0, -(height - bevel * 2) / 2);
+        geometry.rotateX(-Math.PI / 2);
+        const positions = geometry.attributes.position, normals = geometry.attributes.normal, uv = geometry.attributes.uv;
+        for (let i = 0; i < positions.count; i++) {
+            const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+            if (Math.abs(normals.getY(i)) > .5) uv.setXY(i, x / width + .5, z / depth + .5);
+            else if (Math.abs(normals.getZ(i)) > .5) uv.setXY(i, x / width + .5, y / height + .5);
+            else uv.setXY(i, z / depth + .5, y / height + .5);
+        }
+        return geometry;
+    }
+
+    // 微小起伏只参与表面高光，机身颜色保持均匀。
+    function makePaintTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#808080";
+        ctx.fillRect(0, 0, 128, 128);
+        for (let y = 0; y < 128; y += 2) for (let x = 0; x < 128; x += 2) {
+            const value = 120 + ((x * 17 + y * 37) % 16);
+            ctx.fillStyle = `rgb(${value},${value},${value})`;
+            ctx.fillRect(x, y, 1, 1);
+        }
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(6, 6);
+        return texture;
+    }
+
+    function makeSpeakerTexture() {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 256;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#998974";
+        ctx.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 256; i += 6) {
+            ctx.fillStyle = "#d0c1a5"; ctx.fillRect(i, 0, 2, 256);
+            ctx.fillStyle = "#655d50"; ctx.fillRect(0, i, 256, 2);
+            ctx.fillStyle = "#b6a68a"; ctx.fillRect(0, i + 2, 256, 1);
+        }
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.encoding = THREE.sRGBEncoding;
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(3, 1);
+        texture.anisotropy = 8;
+        return texture;
+    }
+
+    function makeKnob(state, parent, position, { front = false, radius = .22, interactive = true } = {}) {
+        // 外层负责旋钮朝向，内层只绕自身轴旋转，前置旋钮也不会歪斜。
+        const mount = new THREE.Group();
+        mount.position.set(...position);
+        if (front) mount.rotation.x = Math.PI / 2;
+        parent.add(mount);
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(radius + .045, radius + .045, .025, 48), state.hardwareMat);
+        mount.add(ring);
+        const rotor = new THREE.Group();
+        rotor.position.y = .09;
+        mount.add(rotor);
+        const knob = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius + .008, .15, 64), state.ivoryMat);
+        knob.castShadow = true;
+        rotor.add(knob);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(radius * .78, radius * .78, .008, 48), state.knobCapMat);
+        cap.position.y = .079;
+        rotor.add(cap);
+        const pointer = new THREE.Mesh(new THREE.BoxGeometry(.017, .012, radius * .36), state.inkMat);
+        pointer.position.set(0, .087, -radius * .52);
+        rotor.add(pointer);
+        for (let i = 0; i < 36; i++) {
+            const angle = i / 36 * Math.PI * 2;
+            const notch = new THREE.Mesh(new THREE.BoxGeometry(.009, .11, .009), state.knobRibMat);
+            notch.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+            rotor.add(notch);
+        }
+        if (interactive) {
+            rotor.traverse(part => { part.userData.part = "knob"; });
+            rotor.userData.knobRoot = true;
+            state.knobMeshes.push(rotor);
+        }
+        return rotor;
     }
 
     function drawRecord(state) {
@@ -229,10 +305,9 @@
 
         const base = x.createRadialGradient(C, C, R_LABEL, C, C, R_OUT);
         if (isSky) {
-            /* 粉透彩胶：暖玫瑰粉径向渐变，和白蜡木同属暖粉家族 */
-            base.addColorStop(0, "#f3a3b3");
-            base.addColorStop(.78, "#e87f9a");
-            base.addColorStop(1, "#d96785");
+            base.addColorStop(0, "#22272c");
+            base.addColorStop(.78, "#13171c");
+            base.addColorStop(1, "#0b0e12");
         } else {
             base.addColorStop(0, "#141317");
             base.addColorStop(.78, "#0b0a0d");
@@ -291,112 +366,47 @@
     }
 
     function drawCounter(state) {
-        const c = state.counterCanvas;
-        const x = c.getContext("2d");
-        x.fillStyle = "#171208";
-        x.fillRect(0, 0, c.width, c.height);
-        const color = state.theme === "sky" ? "#f2a9bd" : "#e8b34c";
-        x.fillStyle = color;
-        x.font = "52px ui-monospace, monospace";
-        x.textAlign = "center"; x.textBaseline = "middle";
-        x.shadowColor = color; x.shadowBlur = 14;
-        const stat = state.stats[state.statIdx];
-        x.fillText(stat ? `${stat.label} ${stat.value}` : "TRACKS 0", 256, 66);
+        const ctx = state.counterCanvas.getContext("2d");
+        ctx.clearRect(0, 0, 512, 128);
+        ctx.fillStyle = state.theme === "archive" ? "#7a705c" : "#92777e";
+        ctx.font = "500 46px ui-monospace, monospace";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("33⅓ RPM", 256, 66);
         state.counterTex.needsUpdate = true;
     }
 
-    /* 防尘盖曲目窗：LCD 风格——半透明深色底条 + 亮色荧光字，
-       烟熏/全透盖、深浅封面上都看得清。无曲目时整窗隐藏。 */
-    function drawLidHud(state) {
-        const c = state.lidHudCanvas;
-        if (!c) return;
-        const x = c.getContext("2d");
-        x.clearRect(0, 0, c.width, c.height);
-        const title = state.trackTitle || "";
-        if (!title) {
-            state.lidHud.visible = false;
-            state.lidHudTex.needsUpdate = true;
-            return;
-        }
-
-        // 底条：圆角深色玻璃（手写圆角，别依赖新 canvas API）
-        const pad = 26, bw = c.width - pad * 2, bh = c.height - pad * 2, r = 40;
-        x.beginPath();
-        x.moveTo(pad + r, pad);
-        x.arcTo(pad + bw, pad, pad + bw, pad + bh, r);
-        x.arcTo(pad + bw, pad + bh, pad, pad + bh, r);
-        x.arcTo(pad, pad + bh, pad, pad, r);
-        x.arcTo(pad, pad, pad + bw, pad, r);
-        x.closePath();
-        x.fillStyle = "rgba(10, 8, 7, .78)";
-        x.fill();
-        x.strokeStyle = state.theme === "sky" ? "rgba(255, 190, 205, .5)" : "rgba(255, 214, 150, .45)";
-        x.lineWidth = 3;
-        x.stroke();
-
-        const main = state.theme === "sky" ? "#ffeef3" : "#ffedcd";
-        const sub = state.theme === "sky" ? "#ffabbf" : "#ffc46e";
-
-        const fit = (text, font, maxWidth) => {
-            x.font = font;
-            if (x.measureText(text).width <= maxWidth) return text;
-            let t = text;
-            while (t.length > 1 && x.measureText(t + "…").width > maxWidth) t = t.slice(0, -1);
-            return t + "…";
-        };
-
-        x.textAlign = "center";
-        x.textBaseline = "middle";
-        x.shadowColor = sub;
-        x.shadowBlur = 16;
-        x.fillStyle = main;
-        x.fillText(fit(title, "600 74px 'Songti SC', serif", 860), 512, 96);
-        const subline = state.trackArtist || "";
-        if (subline) {
-            x.shadowBlur = 10;
-            x.fillStyle = sub;
-            x.fillText(fit(subline, "30px ui-monospace, monospace", 820), 512, 188);
-        }
-        state.lidHud.visible = true;
-        state.lidHudTex.needsUpdate = true;
+    function drawFrontPanel(state) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1024; canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, 1024, 128);
+        ctx.fillStyle = state.theme === "archive" ? "#7a705c" : "#92777e";
+        ctx.font = "500 40px sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(state.theme === "archive" ? "SOUND FIELD   /   STEREO" : "S / F   ·   ANALOGUE", 512, 64);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.encoding = THREE.sRGBEncoding;
+        texture.anisotropy = 8;
+        return texture;
     }
 
-    // 前立面：青铜拉丝面板 + 刻字
-    function drawFrontPanel(state) {
-        const c = document.createElement("canvas");
-        c.width = 2048; c.height = 256;
-        const x = c.getContext("2d");
-        const g = x.createLinearGradient(0, 0, 0, 256);
-        if (state.theme === "sky") {
-            g.addColorStop(0, "#2a2a30");
-            g.addColorStop(.5, "#1f1f25");
-            g.addColorStop(1, "#16161b");
-        } else {
-            g.addColorStop(0, "#5a4526");
-            g.addColorStop(.5, "#43311a");
-            g.addColorStop(1, "#33250f");
-        }
-        x.fillStyle = g;
-        x.fillRect(0, 0, 2048, 256);
-        for (let i = 0; i < 220; i++) {
-            const y0 = Math.random() * 256;
-            x.strokeStyle = `rgba(${Math.random() > .5 ? "255,230,180" : "20,12,4"},${.03 + Math.random() * .05})`;
-            x.lineWidth = .8;
-            x.beginPath();
-            x.moveTo(0, y0);
-            x.lineTo(2048, y0 + (Math.random() - .5) * 3);
-            x.stroke();
-        }
-        /* 不在左侧刻大字：会压住左旋钮。型号行放在左旋钮与计数窗之间的空档。 */
-        x.fillStyle = state.theme === "sky" ? "rgba(242,169,189,.72)" : "rgba(227,192,124,.72)";
-        x.font = "26px ui-monospace, monospace";
-        x.textAlign = "left";
-        x.textBaseline = "middle";
-        x.fillText("CUT & CUE · STEREO ARCHIVE", 450, 128);
-        const tex = new THREE.CanvasTexture(c);
-        tex.encoding = THREE.sRGBEncoding;
-        tex.anisotropy = 8;
-        return tex;
+    // 只用可见表面取景，透明点击热区不应把镜头推远。
+    function framingPoints(root) {
+        root.updateMatrixWorld(true);
+        const points = [];
+        const visit = object => {
+            if (!object.visible) return;
+            if (object.isMesh && object.geometry?.attributes.position) {
+                const materials = Array.isArray(object.material) ? object.material : [object.material];
+                if (materials.some(material => material.visible && (!material.transparent || material.opacity > 0))) {
+                    const positions = object.geometry.attributes.position;
+                    for (let i = 0; i < positions.count; i++) points.push(new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(object.matrixWorld));
+                }
+            }
+            object.children.forEach(visit);
+        };
+        visit(root);
+        return points;
     }
 
     /* ---------------- 场景构建 ---------------- */
@@ -405,14 +415,14 @@
         const state = {
             container, deck: null,
             renderer: null, scene: null, camera: null,
-            cam: { radius: 8.8, theta: 0.65, phi: 1.2 },
-            camBase: { radius: 8.8, theta: 0.65, phi: 1.2 },
+            cam: { radius: 10, theta: .14, phi: 1 },
+            camBase: { radius: 10, theta: .14, phi: 1 },
             camOffset: { theta: 0, phi: 0, radius: 0 },
             camOffsetTgt: { theta: 0, phi: 0, radius: 0 },
             camTarget: null,
             needle: "parked",   // "parked"(回架) | "down"(落针)
             cur: {
-                recordY: 1.15, speed: 0, armLift: 0, armAngle: -1.59, spin: 0, boost: 0, flash: 0,
+                recordY: 0, speed: 0, armLift: 0, armAngle: -1.59, spin: 0, boost: 0, flash: 0,
                 recordX: 0, scratchV: 0, scratchTime: 0, knobFlick: 0, leverFlick: 0
             },
             recordGroup: null, armLiftG: null, armSwingG: null,
@@ -426,8 +436,8 @@
             peaks: FAKE_PEAKS, coverImg: null,
             theme: "archive",
             stats: [], statIdx: 0, statTimer: 0,
-            awake: false, busy: false, raf: 0,
-            platterTop: 0.78, armPark: -1.59, armPlay: -2.17,
+            awake: false, busy: false, raf: 0, motionTimers: new Set(),
+            platterTop: .84, armPark: -1.59, armPlay: -2.10,
             trackTitle: "", trackArtist: ""
         };
 
@@ -437,26 +447,26 @@
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.outputEncoding = THREE.sRGBEncoding;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.1;
+        renderer.toneMappingExposure = 1.05;
         state.renderer = renderer;
 
         const scene = new THREE.Scene();
         state.scene = scene;
         makeEnvTexture(renderer, scene);
 
-        state.camera = new THREE.PerspectiveCamera(34, 2, 0.1, 100);
-        state.camTarget = new THREE.Vector3(0, 0.6, 0.25);
+        state.camera = new THREE.PerspectiveCamera(32, 2, 0.1, 100);
+        state.camTarget = new THREE.Vector3(0, .5, .05);
 
         // 暖色电影光：左侧窗光为主光
-        scene.add(new THREE.HemisphereLight(0xffe8c8, 0x4a3a26, 0.42));
+        scene.add(new THREE.HemisphereLight(0xfff5e9, 0x303b43, 0.65));
 
         const key = new THREE.DirectionalLight(0xffd9a0, 1.35);
-        key.position.set(-5.5, 5.5, 3);
+        key.position.set(-3.5, 6.5, 4);
         key.castShadow = true;
         key.shadow.mapSize.set(2048, 2048);
         key.shadow.camera.left = key.shadow.camera.bottom = -6;
         key.shadow.camera.right = key.shadow.camera.top = 6;
-        key.shadow.radius = 7;
+        key.shadow.radius = 5;
         scene.add(key);
         state.keyLight = key;
 
@@ -474,159 +484,163 @@
         state.groundMat = groundMat;
         const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), groundMat);
         ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -.31;
         ground.receiveShadow = true;
         scene.add(ground);
+        state.groundMesh = ground;
 
-        /* ---------- 机身：木框 + 黑色台面 ---------- */
-
+        /* ---------- 两款机身：浅粉桌面式 / 奶油复古式 ---------- */
         const deck = new THREE.Group();
         scene.add(deck);
         state.deck = deck;
+        state.brushedTexture = makeBrushedTexture();
+        state.paintTexture = makePaintTexture();
+        state.plinthMat = new THREE.MeshPhysicalMaterial({
+            color: 0xf0d6de, roughness: .32, metalness: 0,
+            clearcoat: .38, clearcoatRoughness: .3,
+            bumpMap: state.paintTexture, bumpScale: .009
+        });
+        state.creamBodyMat = new THREE.MeshPhysicalMaterial({
+            color: 0xe7dcc4, roughness: .36, metalness: 0,
+            clearcoat: .32, clearcoatRoughness: .34,
+            bumpMap: state.paintTexture, bumpScale: .012
+        });
+        state.topPlateMat = new THREE.MeshPhysicalMaterial({
+            color: 0xf5e2e7, roughness: .35, metalness: 0,
+            clearcoat: .3, clearcoatRoughness: .34,
+            bumpMap: state.paintTexture, bumpScale: .006
+        });
+        state.hardwareMat = new THREE.MeshStandardMaterial({ color: 0xd9dcdb, metalness: .86, roughness: .24, roughnessMap: state.brushedTexture });
+        state.ivoryMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f0e7, roughness: .3, metalness: .04, clearcoat: .25 });
+        state.knobCapMat = new THREE.MeshStandardMaterial({ color: 0xf9f6ef, roughness: .42, metalness: .12 });
+        state.knobRibMat = new THREE.MeshStandardMaterial({ color: 0xc8c2b6, roughness: .55 });
+        state.inkMat = new THREE.MeshStandardMaterial({ color: 0x746964, roughness: .7 });
+        state.footMat = new THREE.MeshStandardMaterial({ color: 0xd6d0ca, roughness: .72 });
+        state.knobMeshes = [];
+        state.bodyVariants = { archive: new THREE.Group(), sky: new THREE.Group() };
+        const pink = state.bodyVariants.sky, cream = state.bodyVariants.archive;
+        pink.name = "sakura-desktop"; cream.name = "cream-retro";
+        deck.add(pink, cream);
 
-        const plinthMat = new THREE.MeshStandardMaterial({ roughness: .5, metalness: .08 });
-        state.plinthMat = plinthMat;
-        const plinth = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.62, 4.4), plinthMat);
-        plinth.position.y = 0.31;
-        plinth.castShadow = plinth.receiveShadow = true;
-        deck.add(plinth);
+        function body(parent, geometry, material, position, name) {
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(...position);
+            mesh.name = name;
+            mesh.castShadow = mesh.receiveShadow = true;
+            parent.add(mesh);
+            return mesh;
+        }
+        // Lenco 的低矮方形轮廓：连续浅粉机身、细小接缝与奶白隔振脚。
+        body(pink, roundedBox(6.8, .44, 4.6, .16), state.plinthMat, [0, .29, 0], "pink-plinth");
+        body(pink, roundedBox(6.7, .045, 4.5, .14), state.ivoryMat, [0, .523, 0], "ivory-seam");
+        body(pink, roundedBox(6.72, .065, 4.52, .15), state.topPlateMat, [0, .57, 0], "pink-top");
+        for (const x of [-2.68, 2.68]) for (const z of [-1.64, 1.64]) {
+            body(pink, new THREE.CylinderGeometry(.24, .27, .2, 48), state.ivoryMat, [x, -.04, z], "ivory-foot");
+            for (let i = 0; i < 3; i++) body(pink, new THREE.CylinderGeometry(.251, .251, .014, 48), state.footMat, [x, -.085 + i * .045, z], "foot-rib");
+            body(pink, new THREE.CylinderGeometry(.25, .25, .035, 48), state.footMat, [x, -.145, z], "rubber-pad");
+        }
+        makeKnob(state, pink, [2.72, .63, 1.65], { radius: .22 });
 
-        // 黑色台面（内嵌于木框）
-        const topPlate = new THREE.Mesh(
-            new THREE.BoxGeometry(5.35, 0.06, 3.95),
-            new THREE.MeshStandardMaterial({ color: 0x17151a, roughness: .42, metalness: .25 })
-        );
-        state.topPlateMat = topPlate.material;
-        topPlate.position.y = 0.65;
-        topPlate.castShadow = topPlate.receiveShadow = true;
-        deck.add(topPlate);
+        // Brad 的圆润厚机身：前置双旋钮与电源拨键，侧面织物音箱。
+        body(cream, roundedBox(6.55, .68, 4.92, .34), state.creamBodyMat, [0, .21, 0], "cream-shell");
+        body(cream, roundedBox(6.4, .06, 4.76, .28), state.topPlateMat, [0, .58, 0], "cream-top");
+        body(cream, roundedBox(6.26, .065, 4.64, .28), state.ivoryMat, [0, -.15, 0], "cream-base-trim");
+        for (const x of [-2.57, 2.57]) for (const z of [-1.74, 1.74]) {
+            body(cream, new THREE.CylinderGeometry(.19, .23, .12, 40), state.footMat, [x, -.24, z], "retro-foot");
+        }
+        makeKnob(state, cream, [-1.92, .23, 2.46], { front: true, radius: .235 });
+        makeKnob(state, cream, [1.92, .23, 2.46], { front: true, radius: .235, interactive: false });
+        const toggleMount = new THREE.Group();
+        toggleMount.position.set(0, .23, 2.48);
+        toggleMount.rotation.x = Math.PI / 2;
+        cream.add(toggleMount);
+        body(toggleMount, new THREE.CylinderGeometry(.105, .105, .025, 32), state.hardwareMat, [0, 0, 0], "power-collar");
+        const toggle = body(toggleMount, new THREE.CylinderGeometry(.032, .045, .18, 24), state.ivoryMat, [0, .08, 0], "power-toggle");
+        toggle.rotation.z = -.25;
+        state.retroToggle = toggle;
+        toggleMount.traverse(part => { part.userData.part = "lever"; });
+        state.retroPower = toggleMount;
+        const speakerTexture = makeSpeakerTexture();
+        const cloth = new THREE.MeshStandardMaterial({ map: speakerTexture, bumpMap: speakerTexture, bumpScale: .025, roughness: 1 });
+        for (const side of [-1, 1]) {
+            const bezel = body(cream, roundedBox(2.75, .39, .055, .12), state.ivoryMat, [side * 3.286, .2, -.12], "speaker-bezel");
+            bezel.rotation.y = side * Math.PI / 2;
+            const grille = body(cream, roundedBox(2.59, .29, .06, .1), cloth, [side * 3.32, .2, -.12], "woven-speaker");
+            grille.rotation.y = side * Math.PI / 2;
+        }
+        // 铰链与固定螺丝保留真实器物的结构细节，默认展示打开台面。
+        for (const parent of [pink, cream]) for (const x of [-2.25, 2.1]) {
+            body(parent, roundedBox(.38, .1, .14, .04), state.hardwareMat, [x, .63, -2.18], "lid-hinge");
+            body(parent, new THREE.CylinderGeometry(.033, .033, .008, 16), state.inkMat, [x, .685, -2.18], "hinge-screw");
+        }
 
-        /* ---------- 前立面：拉丝面板 + 计数窗 + 实体旋钮 ---------- */
-
-        state.frontMat = new THREE.MeshStandardMaterial({ roughness: .45, metalness: .5 });
-        state.frontPanelMesh = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 0.52), state.frontMat);
-        state.frontPanelMesh.position.set(0, 0.31, 2.203);
+        // 台面印字与真实转速标记，避免装饰性屏幕。
+        state.frontMat = new THREE.MeshStandardMaterial({ transparent: true, roughness: .85, metalness: 0, depthWrite: false });
+        state.frontPanelMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.75, .22), state.frontMat);
+        state.frontPanelMesh.rotation.x = -Math.PI / 2;
+        state.frontPanelMesh.position.set(.35, .61, 2.02);
         deck.add(state.frontPanelMesh);
-
         state.counterCanvas = document.createElement("canvas");
-        state.counterCanvas.width = 512;
-        state.counterCanvas.height = 128;
+        state.counterCanvas.width = 512; state.counterCanvas.height = 128;
         state.counterTex = new THREE.CanvasTexture(state.counterCanvas);
         state.counterTex.encoding = THREE.sRGBEncoding;
-        state.counterMat = new THREE.MeshStandardMaterial({
-            map: state.counterTex,
-            emissive: 0xffffff,
-            emissiveMap: state.counterTex,
-            emissiveIntensity: .8,
-            roughness: .3
-        });
-        state.counterMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.28), state.counterMat);
-        state.counterMesh.position.set(0.62, 0.31, 2.208);
+        state.counterMat = new THREE.MeshStandardMaterial({ map: state.counterTex, transparent: true, roughness: .85, depthWrite: false });
+        state.counterMesh = new THREE.Mesh(new THREE.PlaneGeometry(.66, .165), state.counterMat);
+        state.counterMesh.rotation.x = -Math.PI / 2;
+        state.counterMesh.position.set(-2.05, .61, 2.02);
         deck.add(state.counterMesh);
 
-        const knobMat = new THREE.MeshStandardMaterial({ color: 0xc8a468, metalness: .95, roughness: .3 });
-        const knobMeshes = [];
-        // 左小右大，参考前立面布局
-        [[-2.15, 0.13], [1.85, 0.19]].forEach(([kx, kr]) => {
-            const knob = new THREE.Mesh(new THREE.CylinderGeometry(kr, kr * 1.06, 0.14, 36), knobMat);
-            knob.rotation.x = Math.PI / 2;
-            knob.position.set(kx, 0.31, 2.24);
-            knob.castShadow = true;
-            deck.add(knob);
-            knobMeshes.push(knob);
-            const pointerMark = new THREE.Mesh(
-                new THREE.BoxGeometry(0.018, 0.05, 0.02),
-                new THREE.MeshStandardMaterial({ color: 0x2a2016 })
-            );
-            pointerMark.position.set(kx, 0.31 + kr * 0.55, 2.315);
-            deck.add(pointerMark);
-        });
-
-        /* ---------- 转盘：金属边 + 胶垫 ---------- */
-
-        const PLATTER = { x: -0.4, z: 0.1 };
-
-        const rim = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.95, 1.99, 0.1, 96),
-            new THREE.MeshStandardMaterial({ color: 0xd8d4c8, metalness: .95, roughness: .22 })
-        );
-        rim.position.set(PLATTER.x, 0.73, PLATTER.z);
+        /* ---------- 厚转盘：银色频闪刻度、黑胶垫、大尺寸黑胶 ---------- */
+        const PLATTER = { x: -.95, z: .05 };
+        const rim = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.12, .13, 160), state.hardwareMat);
+        rim.position.set(PLATTER.x, .71, PLATTER.z);
         rim.castShadow = rim.receiveShadow = true;
         deck.add(rim);
-
-        // 云雾主题：氛围灯环包在整个转盘外沿，光从彩胶边缘透出来
-        const glowRing = new THREE.Mesh(
-            new THREE.CylinderGeometry(2.01, 2.01, 0.05, 96),
-            new THREE.MeshBasicMaterial({ color: 0xff9d85 })
-        );
-        glowRing.position.set(PLATTER.x, 0.71, PLATTER.z);
-        glowRing.visible = false;
-        deck.add(glowRing);
-        state.glowRing = glowRing;
-
-        const mat = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.88, 1.88, 0.025, 96),
-            new THREE.MeshStandardMaterial({ color: 0x1a191c, roughness: .9 })
-        );
-        state.platterFeltMat = mat.material;
-        mat.position.set(PLATTER.x, 0.785, PLATTER.z);
+        state.platterFeltMat = new THREE.MeshStandardMaterial({ color: 0x181a1d, roughness: .95 });
+        const mat = new THREE.Mesh(new THREE.CylinderGeometry(2.06, 2.06, .028, 128), state.platterFeltMat);
+        mat.position.set(PLATTER.x, .8, PLATTER.z);
         mat.receiveShadow = true;
         deck.add(mat);
-
-        // 云雾主题彩胶底光：粉透唱片的发光感（档案室主题下强度为 0）
-        const glowLight = new THREE.PointLight(0xffa8c2, 0, 5);
-        glowLight.position.set(PLATTER.x, 1.0, PLATTER.z);
-        scene.add(glowLight);
-        state.glowLight = glowLight;
-
         const recordGroup = new THREE.Group();
-        recordGroup.position.set(PLATTER.x, 0.82, PLATTER.z);
+        recordGroup.position.set(PLATTER.x, .84, PLATTER.z);
         deck.add(recordGroup);
         state.recordGroup = recordGroup;
-
         state.recordCanvas = document.createElement("canvas");
         state.recordCanvas.width = state.recordCanvas.height = 1024;
         state.recordTex = new THREE.CanvasTexture(state.recordCanvas);
         state.recordTex.encoding = THREE.sRGBEncoding;
         state.recordTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-        state.recordMat = new THREE.MeshStandardMaterial({
-            map: state.recordTex, roughness: .3, metalness: .2
-        });
-        const recordSideMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: .4 });
-        state.recordSideMat = recordSideMat;
-
-        const record = new THREE.Mesh(
-            new THREE.CylinderGeometry(1.78, 1.78, 0.035, 96),
-            [recordSideMat, state.recordMat, recordSideMat]
-        );
+        state.recordMat = new THREE.MeshStandardMaterial({ map: state.recordTex, roughness: .28, metalness: .18 });
+        state.recordSideMat = new THREE.MeshStandardMaterial({ color: 0x0a0c10, roughness: .4 });
+        const record = new THREE.Mesh(new THREE.CylinderGeometry(1.98, 1.98, .036, 160), [state.recordSideMat, state.recordMat, state.recordSideMat]);
         record.castShadow = record.receiveShadow = true;
         recordGroup.add(record);
-
-        const spindle = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.032, 0.032, 0.15, 24),
-            new THREE.MeshStandardMaterial({ color: 0xd8d2c2, metalness: .9, roughness: .3 })
-        );
-        spindle.position.y = 0.08;
+        const spindle = new THREE.Mesh(new THREE.CylinderGeometry(.034, .034, .13, 32), state.hardwareMat);
+        spindle.position.y = .07;
         recordGroup.add(spindle);
 
-        /* ---------- S 形唱臂 ---------- */
+        /* ---------- 独立直管唱臂与万向支架 ---------- */
 
-        const metalMat = new THREE.MeshStandardMaterial({ color: 0xd9d4c4, metalness: .95, roughness: .24 });
+        const metalMat = state.hardwareMat;
         const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c2820, roughness: .5, metalness: .3 });
-        // 唱臂组件单独一套材质：档案室银、云雾黑（参考粉色唱机图）
-        const armMat = new THREE.MeshStandardMaterial({ color: 0xd9d4c4, metalness: .95, roughness: .24 });
+        // 唱臂组件独立材质，保留细腻的金属高光。
+        const armMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f0e7, metalness: .08, roughness: .3, clearcoat: .2 });
         state.armMat = armMat;
 
         const armBase = new THREE.Group();
-        armBase.position.set(2.42, 0.68, -1.28);
+        armBase.position.set(2, .68, -1.28);
+        const mountingFoot = new THREE.Mesh(new THREE.CylinderGeometry(.27, .29, .14, 48), state.hardwareMat);
+        mountingFoot.position.set(2, .62, -1.28);
+        mountingFoot.castShadow = true;
+        deck.add(mountingFoot);
         deck.add(armBase);
 
-        const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.23, 0.08, 40), armMat);
+        const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(.22, .25, .08, 48), state.hardwareMat);
         baseDisc.position.y = 0.04;
         baseDisc.castShadow = true;
         armBase.add(baseDisc);
 
-        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.42, 32), armMat);
+        const column = new THREE.Mesh(new THREE.CylinderGeometry(.08, .1, .42, 32), state.hardwareMat);
         column.position.y = 0.28;
         column.castShadow = true;
         armBase.add(column);
@@ -647,17 +661,33 @@
         armLiftG.add(armSwingG);
         state.armSwingG = armSwingG;
 
-        // S 形臂杆：CatmullRom 曲线 + 圆管
+        // 奶白唱臂搭配精密金属轴承与独立唱头。
         const wandCurve = new THREE.CatmullRomCurve3([
             new THREE.Vector3(-0.5, 0.02, 0),
-            new THREE.Vector3(0.1, 0, 0.055),
-            new THREE.Vector3(0.9, -0.01, -0.045),
-            new THREE.Vector3(1.7, -0.04, 0.02),
+            new THREE.Vector3(.1, 0, 0),
+            new THREE.Vector3(.9, -.01, 0),
+            new THREE.Vector3(1.7, -.04, 0),
             new THREE.Vector3(2.28, -0.1, 0.06)
         ]);
-        const wand = new THREE.Mesh(new THREE.TubeGeometry(wandCurve, 40, 0.032, 12), armMat);
+        const wand = new THREE.Mesh(new THREE.TubeGeometry(wandCurve, 40, .047, 16), armMat);
         wand.castShadow = true;
         armSwingG.add(wand);
+
+        for (const offset of [-.045, .045]) {
+            const bearing = new THREE.Mesh(new THREE.TorusGeometry(.115, .014, 8, 40), state.hardwareMat);
+            bearing.rotation.y = Math.PI / 2;
+            bearing.position.set(offset, .38, 0);
+            armBase.add(bearing);
+        }
+        const cueLever = new THREE.Mesh(new THREE.CylinderGeometry(.016, .016, .25, 16), state.hardwareMat);
+        cueLever.rotation.z = -.4;
+        cueLever.position.set(2.36, .85, -1.02);
+        deck.add(cueLever);
+        for (const x of [2.3, 2.46]) {
+            const screw = new THREE.Mesh(new THREE.CylinderGeometry(.018, .018, .012, 16), state.hardwareMat);
+            screw.position.set(x, -.06, .06);
+            armSwingG.add(screw);
+        }
 
         /* 隐形加粗热区：臂杆本身太细难点，套一根看不见的粗管跟着臂走，
            指针判定和 hover 光标都吃它。 */
@@ -673,7 +703,7 @@
         headshellHit.position.set(2.45, -0.12, 0.06);
         armSwingG.add(headshellHit);
 
-        const counterweight = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.24, 32), armMat);
+        const counterweight = new THREE.Mesh(new THREE.CylinderGeometry(.16, .16, .3, 48), state.hardwareMat);
         counterweight.rotation.z = Math.PI / 2;
         counterweight.position.set(-0.62, 0.02, 0);
         counterweight.castShadow = true;
@@ -684,7 +714,7 @@
         counterStub.position.set(-0.35, 0.02, 0);
         armSwingG.add(counterStub);
 
-        const headshell = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.13), armMat);
+        const headshell = new THREE.Mesh(roundedBox(.4, .085, .19, .04), armMat);
         headshell.position.set(2.4, -0.11, 0.06);
         headshell.rotation.y = -0.2;
         headshell.castShadow = true;
@@ -709,159 +739,28 @@
 
         // 停靠架（带卡扣）
         const restPost = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.4, 16), metalMat);
-        restPost.position.set(2.42, 0.85, 1.15);
+        restPost.position.set(2, .85, 1.15);
         restPost.castShadow = true;
         deck.add(restPost);
         const restClip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.18), darkMat);
-        restClip.position.set(2.42, 1.06, 1.15);
+        restClip.position.set(2, 1.06, 1.15);
         deck.add(restClip);
 
-        // 台面上的启动杆
-        const switchBase = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.3), darkMat);
-        switchBase.position.set(1.95, 0.695, 1.35);
+        // 左下角启动键：大圆形点击面，与唱臂采用同一播放开关。
+        const switchBase = new THREE.Mesh(new THREE.CylinderGeometry(.21, .23, .04, 48), state.hardwareMat);
+        switchBase.position.set(-2.9, .615, 1.9);
         deck.add(switchBase);
-        const switchLever = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.16, 12), metalMat);
-        switchLever.position.set(1.95, 0.78, 1.35);
+        const switchLever = new THREE.Mesh(new THREE.CylinderGeometry(.155, .155, .045, 48), darkMat);
+        switchLever.position.set(-2.9, .655, 1.9);
         switchLever.castShadow = true;
         deck.add(switchLever);
-
-        /* ---------- 防尘盖（烟熏亚克力，打开态） ---------- */
-
-        /* ---------- 防尘盖（打开态） ----------
-           真玻璃：transmission 必须给到 1——少一点都不行，
-           残余的白色漫反射会把深色内容洗白（实测 r149 管线本身没毛病）。
-           档案室=烟熏，云雾=全透（applyTheme 切换） */
-        const lidMat = new THREE.MeshPhysicalMaterial({
-            color: 0x2a221c,
-            transparent: true,
-            opacity: 0.22,
-            roughness: 0.06,
-            metalness: 0,
-            transmission: 0,
-            thickness: 0.08,
-            ior: 1.5,
-            clearcoat: 0.5,
-            clearcoatRoughness: 0.2,
-            side: THREE.DoubleSide,
-            depthWrite: false
-        });
-        lidMat.envMapIntensity = 1.4;
-        state.lidMat = lidMat;
-
-        const lid = new THREE.Group();
-        lid.position.set(0, 0.68, -2.05);
-        deck.add(lid);
-        state.lidGroup = lid;
-
-        // 真薄板（有厚度）而不是平面：棱边会吃高光，是「看得见的透明盖」的关键
-        const lidPanel = new THREE.Mesh(new THREE.BoxGeometry(5.35, 3.4, 0.05), lidMat);
-        lidPanel.position.set(0, 1.62, -0.42);
-        lidPanel.rotation.x = -0.24;
-        lid.add(lidPanel);
-
-        // 云雾主题全透盖的轮廓线：描整块薄板的 12 条棱
-        const lidOutline = new THREE.LineSegments(
-            new THREE.EdgesGeometry(new THREE.BoxGeometry(5.35, 3.4, 0.05)),
-            new THREE.LineBasicMaterial({ color: 0x93a8b4, transparent: true, opacity: .9 })
-        );
-        lidOutline.position.copy(lidPanel.position);
-        lidOutline.rotation.copy(lidPanel.rotation);
-        lidOutline.visible = false;
-        lid.add(lidOutline);
-        state.lidOutline = lidOutline;
-
-        // 盖面上的斜向高光带：玻璃的「反光痕」，比染底色更像透明亚克力
-        const lidSheenC = document.createElement("canvas");
-        lidSheenC.width = lidSheenC.height = 256;
-        const lsx = lidSheenC.getContext("2d");
-        const lsg = lsx.createLinearGradient(30, 226, 226, 30);
-        lsg.addColorStop(0, "rgba(255,255,255,0)");
-        lsg.addColorStop(.32, "rgba(255,255,255,0)");
-        lsg.addColorStop(.45, "rgba(255,255,255,.6)");
-        lsg.addColorStop(.55, "rgba(255,255,255,.16)");
-        lsg.addColorStop(.68, "rgba(255,255,255,0)");
-        lsg.addColorStop(1, "rgba(255,255,255,0)");
-        lsx.fillStyle = lsg;
-        lsx.fillRect(0, 0, 256, 256);
-        const lidSheenTex = new THREE.CanvasTexture(lidSheenC);
-        const lidSheen = new THREE.Mesh(
-            new THREE.PlaneGeometry(5.35, 3.4),
-            new THREE.MeshBasicMaterial({ map: lidSheenTex, transparent: true, depthWrite: false })
-        );
-        lidSheen.position.set(0, 1.62, -0.415);
-        lidSheen.rotation.x = -0.24;
-        lidSheen.visible = false;
-        lid.add(lidSheen);
-        state.lidSheen = lidSheen;
-
-        // 盖沿金属包边
-        const lidEdge = new THREE.Mesh(
-            new THREE.BoxGeometry(5.35, 0.05, 0.05),
-            new THREE.MeshStandardMaterial({ color: 0xc8a468, metalness: .9, roughness: .3 })
-        );
-        state.lidEdgeMat = lidEdge.material;
-        state.lidEdge = lidEdge;
-        lidEdge.position.set(0, 3.3, -0.82);
-        lidEdge.rotation.x = -0.24;
-        lid.add(lidEdge);
-
-        // 铰链
-        state.lidHinges = [];
-        [-2.3, 2.3].forEach(hx => {
-            const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.24, 16), darkMat);
-            hinge.rotation.z = Math.PI / 2;
-            hinge.position.set(hx, 0.68, -2.05);
-            deck.add(hinge);
-            state.lidHinges.push(hinge);
-        });
-
-        // 盖上的铭牌
-        const lidBadgeCanvas = document.createElement("canvas");
-        lidBadgeCanvas.width = 512; lidBadgeCanvas.height = 96;
-        const bx = lidBadgeCanvas.getContext("2d");
-        bx.fillStyle = "rgba(30,22,14,.85)";
-        bx.fillRect(0, 0, 512, 96);
-        bx.fillStyle = "#e3c07c";
-        bx.font = "600 44px 'Songti SC', serif";
-        bx.textAlign = "center"; bx.textBaseline = "middle";
-        bx.fillText("CUT & CUE", 256, 50);
-        const lidBadgeTex = new THREE.CanvasTexture(lidBadgeCanvas);
-        lidBadgeTex.encoding = THREE.sRGBEncoding;
-        const lidBadge = new THREE.Mesh(
-            new THREE.PlaneGeometry(0.95, 0.18),
-            new THREE.MeshStandardMaterial({ map: lidBadgeTex, roughness: .5, transparent: true })
-        );
-        lidBadge.position.set(0.9, 2.9, -0.66);
-        lidBadge.rotation.x = -0.24;
-        lid.add(lidBadge);
-        state.lidBadge = lidBadge;
-
-        /* 盖面上的曲目信息窗：装片后显示歌名 + 艺人，
-           像贴在防尘盖内侧的一行小荧光字。 */
-        state.lidHudCanvas = document.createElement("canvas");
-        state.lidHudCanvas.width = 1024;
-        state.lidHudCanvas.height = 256;
-        state.lidHudTex = new THREE.CanvasTexture(state.lidHudCanvas);
-        state.lidHudTex.encoding = THREE.sRGBEncoding;
-        state.lidHudTex.anisotropy = 4;
-        state.lidHudMat = new THREE.MeshBasicMaterial({
-            map: state.lidHudTex,
-            transparent: true,
-            depthWrite: false
-        });
-        state.lidHud = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 0.62), state.lidHudMat);
-        state.lidHud.position.set(0, 1.95, -0.44);
-        state.lidHud.rotation.x = -0.24;
-        state.lidHud.visible = false;
-        state.lidHud.renderOrder = 2;
-        lid.add(state.lidHud);
 
         /* ---------- LED 电源灯 ---------- */
 
         const ledMat = new THREE.MeshStandardMaterial({ color: 0x5a5142 });
         state.ledMat = ledMat;
         const led = new THREE.Mesh(new THREE.SphereGeometry(0.04, 16, 12), ledMat);
-        led.position.set(2.15, 0.7, 1.62);
+        led.position.set(-2.55, .615, 1.9);
         deck.add(led);
 
         /* ---------- 可交互部件：唱片 / 唱臂 / 拨杆 / 旋钮 ---------- */
@@ -870,13 +769,18 @@
         armSwingG.traverse(o => { o.userData.part = "arm"; });
         switchLever.userData.part = "lever";
         switchBase.userData.part = "lever";
-        knobMeshes.forEach(k => { k.userData.part = "knob"; });
+
 
         state.recordMesh = record;
         state.leverMesh = switchLever;
-        state.hitTargets = [record, armSwingG, switchLever, switchBase, ...knobMeshes];
-        state.platterPos = new THREE.Vector3(PLATTER.x, 0.82, PLATTER.z);
+        state.sharedHitTargets = [record, armSwingG];
+        state.pinkSwitch = [switchLever, switchBase];
+        pink.add(switchLever, switchBase, led);
+        state.ledMesh = led;
+        state.leverRestY = switchLever.position.y;
+        state.platterPos = new THREE.Vector3(PLATTER.x, .84, PLATTER.z);
         state.platterX = PLATTER.x;
+
 
         /* ---------- 互动：相机环绕缩放 + 点唱机本体 ---------- */
 
@@ -890,6 +794,11 @@
         el.style.touchAction = "none";
 
         const raycaster = new THREE.Raycaster();
+
+        function knobRoot(object) {
+            while (object && !object.userData.knobRoot) object = object.parent;
+            return object;
+        }
 
         function pointerHit(e) {
             const rect = el.getBoundingClientRect();
@@ -944,6 +853,7 @@
                 // 一圈 = 1.8s（33⅓ RPM），换算成音频时间交给渲染帧节流应用
                 state.cur.scratchTime += d / (Math.PI * 2) * 1.8;
                 lastAngle = a;
+                if (reducedMotion.matches) frame(state);
                 return;
             }
             if (!dragging) {
@@ -955,6 +865,7 @@
             state.camOffsetTgt.phi = Math.min(0.3, Math.max(-0.5,
                 state.camOffsetTgt.phi - (e.clientY - lastY) * 0.004));
             lastX = e.clientX; lastY = e.clientY;
+            if (reducedMotion.matches) frame(state);
         });
 
         ["pointerup", "pointercancel"].forEach(type =>
@@ -982,7 +893,7 @@
                     }
                     if (part === "lever") state.cur.leverFlick = 1;
                     if (part === "knob") {
-                        state.flickKnob = hit.object;
+                        state.flickKnob = knobRoot(hit.object);
                         state.cur.knobFlick = 1;
                     }
                 }
@@ -997,17 +908,20 @@
             const hit = pointerHit(e);
             if (hit?.object.userData.part === "knob" && audio) {
                 audio.volume = Math.min(1, Math.max(0, audio.volume - e.deltaY * 0.0012));
-                state.flickKnob = hit.object;
+                state.flickKnob = knobRoot(hit.object);
                 state.cur.knobFlick = Math.min(1, Math.abs(e.deltaY) * 0.01 + 0.3);
+                if (reducedMotion.matches) frame(state);
                 return;
             }
             state.camOffsetTgt.radius = Math.min(3.2, Math.max(-3.4,
                 state.camOffsetTgt.radius + e.deltaY * 0.004));
+            if (reducedMotion.matches) frame(state);
         }, { passive: false });
         el.addEventListener("dblclick", () => {
             state.camOffsetTgt.theta = 0;
             state.camOffsetTgt.phi = 0;
             state.camOffsetTgt.radius = 0;
+            if (reducedMotion.matches) frame(state);
         });
 
         return state;
@@ -1015,14 +929,14 @@
 
     /* ---------------- 动作 ---------------- */
 
-    /* 33⅓ RPM = 0.5556 圈/秒 ≈ 3.49 rad/s；IDLE 是通电空转 */
+    /* 33⅓ RPM = 0.5556 圈/秒 ≈ 3.49 rad/s；待机时保持停转。 */
     const FULL_SPEED = 3.49;
-    const IDLE_SPEED = 0.9;
+    const IDLE_SPEED = 0;
 
-    /* 声槽几何：外圈半径 1.7 → 臂角 -2.13，内圈半径 0.75 → 臂角 -2.58。
+    /* 声槽几何：外圈半径 1.9 → 臂角 -2.10，内圈半径 .75 → 臂角 -2.72。
        臂角随播放进度从外圈走向内圈，就是黑胶的「进度条」。 */
-    const GROOVE_OUT = 1.7, GROOVE_IN = 0.75;
-    const ARM_GROOVE_OUT = -2.13, ARM_GROOVE_IN = -2.58;
+    const GROOVE_OUT = 1.9, GROOVE_IN = .75;
+    const ARM_GROOVE_OUT = -2.10, ARM_GROOVE_IN = -2.72;
 
     function grooveAngle(p) {
         return ARM_GROOVE_OUT + (ARM_GROOVE_IN - ARM_GROOVE_OUT) * Math.min(1, Math.max(0, p));
@@ -1034,7 +948,7 @@
     }
 
     function ledOn(state) {
-        state.ledMat.emissive.setHex(state.theme === "sky" ? 0x63b7cc : 0xe8b34c);
+        state.ledMat.emissive.setHex(state.theme === "archive" ? 0xdbc68f : 0xe9b5c2);
         state.ledMat.emissiveIntensity = 1.2;
     }
 
@@ -1042,28 +956,75 @@
         state.ledMat.emissive.setHex(0x000000);
     }
 
+    function motionAfter(state, callback, delay) {
+        const timer = setTimeout(() => {
+            state.motionTimers.delete(timer);
+            callback();
+        }, delay);
+        state.motionTimers.add(timer);
+        return timer;
+    }
+
+    function cancelMotion({ preservePose = false } = {}) {
+        if (!S) return;
+        for (const timer of S.motionTimers) clearTimeout(timer);
+        S.motionTimers.clear();
+        S.busy = false;
+        S.demo = false;
+        S.cur.recordX = S.cur.recordXT = 0;
+        S.cur.recordY = S.cur.recordYT = 0;
+        if (!preservePose) {
+            S.cur.armLift = S.cur.armLiftT = 0;
+            S.needle = isPlaying() ? "down" : "parked";
+            S.cur.armAngle = S.cur.armAngleT = isPlaying() ? grooveAngle(playProgress()) : S.armPark;
+        }
+        S.cur.speedT = isPlaying() ? FULL_SPEED : 0;
+        if (isPlaying()) ledOn(S); else ledOff(S);
+        if (S.awake && reducedMotion.matches) frame(S);
+    }
+
     /* 落针：回架 → 抬臂 → 对准当前进度的声槽 → 液压缓落 → 出声。 */
     function needleDropSequence(state, cb) {
-        if (state.busy) { cb?.(); return; }
+        if (state.busy) return;
+        if (reducedMotion.matches || !state.awake) {
+            state.needle = "down";
+            state.cur.armAngle = state.cur.armAngleT = grooveAngle(playProgress());
+            state.cur.armLift = state.cur.armLiftT = 0;
+            state.cur.speedT = FULL_SPEED;
+            ledOn(state);
+            if (state.awake) frame(state);
+            cb?.();
+            return;
+        }
         state.busy = true;
         state.cur.armLiftT = 0.16;
         state.cur.speedT = FULL_SPEED;   // 转盘先转起来，再落针
-        setTimeout(() => { state.cur.armAngleT = grooveAngle(playProgress()); }, 380);
-        setTimeout(() => {
+        motionAfter(state, () => { state.cur.armAngleT = grooveAngle(playProgress()); }, 180);
+        motionAfter(state, () => {
             state.cur.armLiftT = 0;
             state.needle = "down";
             ledOn(state);
-        }, 1080);
-        setTimeout(() => { state.busy = false; cb?.(); }, 1250);
+        }, 550);
+        motionAfter(state, () => { state.busy = false; cb?.(); }, 700);
     }
 
     /* 回架停转：抬臂 → 摆回臂架 → 落架 → 转盘缓停。 */
     function needleParkSequence(state, cb) {
-        if (state.busy) { cb?.(); return; }
+        if (state.busy) return;
+        if (reducedMotion.matches || !state.awake) {
+            state.needle = "parked";
+            state.cur.armAngle = state.cur.armAngleT = state.armPark;
+            state.cur.armLift = state.cur.armLiftT = 0;
+            state.cur.speedT = 0;
+            ledOff(state);
+            if (state.awake) frame(state);
+            cb?.();
+            return;
+        }
         state.busy = true;
         state.cur.armLiftT = 0.16;
-        setTimeout(() => { state.cur.armAngleT = state.armPark; }, 350);
-        setTimeout(() => {
+        motionAfter(state, () => { state.cur.armAngleT = state.armPark; }, 180);
+        motionAfter(state, () => {
             state.cur.armLiftT = 0;
             state.needle = "parked";
             ledOff(state);
@@ -1076,7 +1037,7 @@
             } else {
                 cb?.();
             }
-        }, 1000);
+        }, 600);
     }
 
     /* 没装片时点了播放：优先让应用侧决定放哪张（比如最近添加），
@@ -1096,6 +1057,7 @@
        停 → 落针、LED 亮、转盘起转、出声；
        播 → 收针回架、LED 灭、转盘缓停、停声。 */
     function togglePlay(state) {
+        if (playbackHandler && playbackHandler() === true) return;
         if (audio && audio.currentSrc) {
             if (audio.paused) {
                 needleDropSequence(state, () => audio.play().catch(() => {}));
@@ -1113,8 +1075,8 @@
             state.cur.speed = IDLE_SPEED;
             return;
         }
-        setTimeout(() => { state.cur.recordYT = 0; }, 200);
-        setTimeout(() => { state.cur.speedT = IDLE_SPEED; }, 1300);
+        motionAfter(state, () => { state.cur.recordYT = 0; }, 200);
+        motionAfter(state, () => { state.cur.speedT = IDLE_SPEED; }, 1300);
     }
 
     /* ---------------- 渲染循环 ---------------- */
@@ -1140,19 +1102,38 @@
         state.camera.aspect = w / h;
         state.camera.updateProjectionMatrix();
 
-        /* 取景适配：FOV 只管垂直方向，容器越扁整机越容易被上下裁掉。
-           垂直项按斜俯机位反推——机位俯角约 21°，防尘盖顶比注视点高约 3.1
-           个单位（注视点已下移 0.3），留 ~0.5 余量保证盖顶不被顶栏裁掉；
-           水平项保证木框加唱臂入画。 */
-        const halfTan = Math.tan(state.camera.fov * Math.PI / 360);
-        state.camBase.radius = Math.max(
-            3.58 / halfTan,
-            3.55 / (halfTan * state.camera.aspect)
-        );
+        // 按真实可见顶点取景，并校正透视投影的中心，消除一侧多余留白。
+        const theta = state.camBase.theta, phi = state.camBase.phi;
+        const tan = Math.tan(state.camera.fov * Math.PI / 360);
+        const right = new THREE.Vector3(Math.cos(theta), 0, -Math.sin(theta));
+        const up = new THREE.Vector3(-Math.cos(phi) * Math.sin(theta), Math.sin(phi), -Math.cos(phi) * Math.cos(theta));
+        const outward = new THREE.Vector3(Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta));
+        const projected = state.framingPoints.map(point => ({ x: point.dot(right), y: point.dot(up), z: point.dot(outward) }));
+        state.camTarget.set(0, .45, .05);
+        for (let pass = 0; pass < 4; pass++) {
+            const tx = state.camTarget.dot(right), ty = state.camTarget.dot(up), tz = state.camTarget.dot(outward);
+            let distance = 0;
+            for (const point of projected) {
+                distance = Math.max(distance, point.z - tz + Math.abs(point.x - tx) / (tan * state.camera.aspect), point.z - tz + Math.abs(point.y - ty) / tan);
+            }
+            state.camBase.radius = distance * 1.035;
+            if (pass === 3) break;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const point of projected) {
+                const depth = state.camBase.radius - point.z + tz;
+                const x = (point.x - tx) / (depth * tan * state.camera.aspect);
+                const y = (point.y - ty) / (depth * tan);
+                minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            }
+            state.camTarget.addScaledVector(right, (minX + maxX) * .5 * state.camBase.radius * tan * state.camera.aspect);
+            state.camTarget.addScaledVector(up, (minY + maxY) * .5 * state.camBase.radius * tan);
+        }
     }
 
     function frame(state) {
         state.raf = 0;
+        resize(state);
         const cur = state.cur;
 
         cur.recordY += ((cur.recordYT ?? 0) - cur.recordY) * 0.055;
@@ -1184,12 +1165,13 @@
         cur.armLift += ((cur.armLiftT ?? 0) - cur.armLift) * 0.16;
         cur.armAngle += ((cur.armAngleT ?? state.armPark) - cur.armAngle) * 0.045;
 
-        state.camOffset.theta += (state.camOffsetTgt.theta - state.camOffset.theta) * 0.09;
-        state.camOffset.phi += (state.camOffsetTgt.phi - state.camOffset.phi) * 0.09;
-        state.camOffset.radius += (state.camOffsetTgt.radius - state.camOffset.radius) * 0.09;
+        const cameraEase = reducedMotion.matches ? 1 : .09;
+        state.camOffset.theta += (state.camOffsetTgt.theta - state.camOffset.theta) * cameraEase;
+        state.camOffset.phi += (state.camOffsetTgt.phi - state.camOffset.phi) * cameraEase;
+        state.camOffset.radius += (state.camOffsetTgt.radius - state.camOffset.radius) * cameraEase;
 
         state.recordGroup.position.x = state.platterX + cur.recordX;
-        state.recordGroup.position.y = 0.82 + cur.recordY;
+        state.recordGroup.position.y = .84 + cur.recordY;
         state.recordGroup.rotation.y = cur.spin;
         state.armLiftG.position.y = 0.42 + cur.armLift;
         state.armSwingG.rotation.y = cur.armAngle;
@@ -1198,27 +1180,29 @@
            落针播放 / 演示空转时由 ledOn 常亮接管。 */
         if (state.needle === "parked" && !state.demo && !isPlaying()) {
             const t = performance.now() / 1000;
-            state.ledMat.emissive.setHex(state.theme === "sky" ? 0x63b7cc : 0xe8b34c);
+            state.ledMat.emissive.setHex(state.theme === "archive" ? 0xdbc68f : 0xe9b5c2);
             state.ledMat.emissiveIntensity = 0.2 + 0.16 * (0.5 + 0.5 * Math.sin(t * 1.6));
         }
 
-        /* 旋钮拧动 / 拨杆回弹 */
-        if (state.flickKnob && cur.knobFlick > 0.02) {
-            state.flickKnob.rotation.y = Math.sin(cur.knobFlick * 12) * cur.knobFlick * 0.5;
+        /* 音量刻线跟随真实播放器；前置旋钮仍沿自身轴旋转。 */
+        const volumeAngle = ((audio?.volume ?? .7) - .5) * Math.PI * 1.4;
+        for (const knob of state.knobMeshes) knob.rotation.y = volumeAngle;
+        if (state.flickKnob && cur.knobFlick > 0.02 && !reducedMotion.matches) {
+            state.flickKnob.rotation.y += Math.sin(cur.knobFlick * 12) * cur.knobFlick * .12;
             cur.knobFlick *= 0.9;
         } else if (state.flickKnob) {
-            state.flickKnob.rotation.y = 0;
             state.flickKnob = null;
             cur.knobFlick = 0;
         }
 
         if (state.leverMesh && cur.leverFlick > 0.02) {
-            state.leverMesh.rotation.x = -Math.sin(cur.leverFlick * Math.PI) * 0.55;
+            state.leverMesh.position.y = state.leverRestY - Math.sin(cur.leverFlick * Math.PI) * .025;
             cur.leverFlick *= 0.88;
-        } else if (state.leverMesh && state.leverMesh.rotation.x !== 0) {
-            state.leverMesh.rotation.x = 0;
+        } else if (state.leverMesh) {
+            state.leverMesh.position.y = state.leverRestY;
             cur.leverFlick = 0;
         }
+        state.retroToggle.rotation.z = state.needle === "parked" ? -.25 : .25;
 
         if (cur.flash > 0.02) {
             state.counterMat.emissiveIntensity = .8 + cur.flash * 1.6;
@@ -1231,10 +1215,9 @@
         state.cam.radius = state.camBase.radius + state.camOffset.radius;
         placeCamera(state);
 
-        resize(state);
         state.renderer.render(state.scene, state.camera);
 
-        if (state.awake && !document.hidden) {
+        if (state.awake && !document.hidden && !reducedMotion.matches) {
             state.raf = requestAnimationFrame(() => frame(state));
         }
     }
@@ -1250,16 +1233,16 @@
     /* ---------------- 对外 API ---------------- */
 
     function mount(container) {
-        if (!window.THREE) return;
+        if (!window.THREE) return false;
         if (!S) {
-            S = buildScene(container);
+            try { S = buildScene(container); }
+            catch (error) { console.warn("唱机预览不可用", error); return false; }
             S.theme = document.body.dataset.theme === "sky" ? "sky" : "archive";
             S.trackTitle = lastTrackInfo.title;
             S.trackArtist = lastTrackInfo.artist;
             applyTheme(S);
             drawRecord(S);
             drawCounter(S);
-            drawLidHud(S);
             container.appendChild(S.renderer.domElement);
 
             if (audio && !audio.paused && audio.currentSrc) {
@@ -1279,6 +1262,12 @@
         }
 
         S.awake = true;
+        if (!S.resizeObserver) S.resizeObserver = new ResizeObserver(() => {
+            if (S.awake && reducedMotion.matches) frame(S);
+        });
+        S.resizeObserver.disconnect();
+        S.resizeObserver.observe(container);
+        if (pendingTrack) setTrack(pendingTrack);
 
         if (pendingStats && !S.stats.length) {
             S.stats = pendingStats;
@@ -1318,6 +1307,7 @@
         }
 
         startLoop(S);
+        return true;
     }
 
     function sleep() {
@@ -1377,131 +1367,114 @@
         }
     }
 
-    function setTrack({ coverArt, grooveUrl, title, artist } = {}) {
-        /* 曲目信息窗：title/artist 任一显式给出（含空串）就刷新盖子上的显示；
-           唱机还没挂载时先记着，mount 时补上。 */
-        if (title !== undefined || artist !== undefined) {
-            lastTrackInfo = { title: title || "", artist: artist || "" };
-            if (S) {
-                S.trackTitle = lastTrackInfo.title;
-                S.trackArtist = lastTrackInfo.artist;
-                drawLidHud(S);
-                if (reducedMotion.matches) frame(S);
+    function setTrack(track = {}) {
+        const newTrack = track.title !== undefined || track.artist !== undefined || track.grooveUrl !== undefined;
+        if (newTrack) {
+            trackRevision++;
+            lastTrackInfo = { title: track.title || "", artist: track.artist || "" };
+            pendingTrack = { ...track, coverArt: track.coverArt || "" };
+            if (S) { S.trackTitle = lastTrackInfo.title; S.trackArtist = lastTrackInfo.artist; S.peaks = FAKE_PEAKS; }
+        } else pendingTrack = { ...pendingTrack, ...track };
+        const revision = trackRevision;
+        if (newTrack || track.coverArt !== undefined) {
+            const imageRevision = ++coverRevision;
+            if (S) { S.coverImg = null; drawRecord(S); }
+            miniSetCover(null);
+            const cover = track.coverArt || "";
+            if (cover) {
+                const image = new Image();
+                image.onload = () => {
+                    if (revision !== trackRevision || imageRevision !== coverRevision) return;
+                    miniSetCover(cover);
+                    if (S) { S.coverImg = image; drawRecord(S); if (reducedMotion.matches) frame(S); }
+                };
+                image.src = cover;
             }
         }
-        if (coverArt) {
-            miniSetCover(coverArt);
-            const img = new Image();
-            img.onload = () => {
-                if (S) { S.coverImg = img; drawRecord(S); if (reducedMotion.matches) frame(S); }
-            };
-            img.src = coverArt;
+        if (track.grooveUrl && window.Waveform) {
+            window.Waveform.getPeaks(track.grooveUrl, 720).then(peaks => {
+                if (S && revision === trackRevision) { S.peaks = peaks; drawRecord(S); if (reducedMotion.matches) frame(S); }
+            }).catch(() => {});
         }
-        if (grooveUrl && window.Waveform) {
-            window.Waveform.getPeaks(grooveUrl, 720)
-                .then(peaks => {
-                    if (S) { S.peaks = peaks; drawRecord(S); }
-                })
-                .catch(() => {});
-        }
+        if (S && reducedMotion.matches) frame(S);
     }
 
     function applyTheme(state) {
-        const isSky = state.theme === "sky";
-        if (isSky) {
-            // 粉色系云雾机：黑色哑光机身、黑唱臂、粉透彩胶、盘沿氛围灯、全透明盖
-            state.plinthMat.map = null;
-            state.plinthMat.color.setHex(0x1b1b1f);
-            state.plinthMat.roughness = .5;
-            state.plinthMat.metalness = .15;
-            state.groundMat.opacity = 0.16;
-            state.armMat.color.setHex(0x1b1b1f);
-            state.armMat.metalness = .55;
-            state.armMat.roughness = .5;
-            state.recordMat.transparent = true;
-            state.recordMat.opacity = .88;
-            state.recordMat.roughness = .3;
-            state.recordMat.metalness = .05;
-            state.recordMat.emissive.setHex(0xff9db8);
-            state.recordMat.emissiveIntensity = .42;
-            state.recordSideMat.color.setHex(0xe79fb8);
-            state.glowLight.intensity = .55;
-            state.glowRing.visible = true;
-            state.platterFeltMat.color.setHex(0x241a1c);
-            state.topPlateMat.color.setHex(0x141318);
-            state.topPlateMat.metalness = .2;
-            // 云雾：真玻璃盖——transmission 满 1 折射身后机器；
-            // 轮廓线和高光带辅助读形；空背景处采样清屏色，调成照片的淡蓝白
-            state.lidMat.transparent = false;
-            state.lidMat.opacity = 1;
-            state.lidMat.transmission = 1;
-            state.lidMat.color.setHex(0xffffff);
-            state.lidMat.specularColor.setHex(0xfff5ee);
-            state.lidMat.envMapIntensity = 1.2;
-            // 关掉唱片高光点光源：它会在全透盖上反出一个晃眼的亮圆斑；
-            // 粉胶的光泽由自发光 + 盘沿灯环负责
-            state.sheen.intensity = 0;
-            state.lidEdge.visible = false;
-            state.lidOutline.visible = true;
-            state.lidSheen.visible = true;
-            state.lidBadge.visible = false;
-            state.renderer.setClearColor(0xe9f1f5, 0);
-            // 与背景照片的桌面视角对齐：镜头放平一点、机位压低一点
-            state.camBase.phi = 1.3;
-            state.camTarget.y = 1.2;
-            state.keyLight.color.setHex(0xffe8dc);
-            state.keyLight.intensity = 1.15;
-        } else {
-            state.plinthMat.map = makeWoodTexture(true);
-            state.plinthMat.color.setHex(0xffffff);
-            state.plinthMat.roughness = .5;
-            state.plinthMat.metalness = .08;
-            state.groundMat.opacity = 0.26;
-            state.armMat.color.setHex(0xd9d4c4);
-            state.armMat.metalness = .95;
-            state.armMat.roughness = .24;
-            state.recordMat.transparent = false;
-            state.recordMat.opacity = 1;
-            state.recordMat.roughness = .3;
-            state.recordMat.metalness = .2;
-            state.recordMat.emissive.setHex(0x000000);
-            state.recordMat.emissiveIntensity = 0;
-            state.recordSideMat.color.setHex(0x0a0a0c);
-            state.glowLight.intensity = 0;
-            state.glowRing.visible = false;
-            state.platterFeltMat.color.setHex(0x1a191c);
-            state.topPlateMat.color.setHex(0x17151a);
-            state.topPlateMat.metalness = .25;
-            // 档案室：烟熏玻璃盖
-            state.lidMat.transparent = true;
-            state.lidMat.transmission = 0;
-            state.lidMat.opacity = .22;
-            state.lidMat.color.setHex(0x2a221c);
-            state.lidMat.specularColor.setHex(0xffe0b0);
-            state.sheen.intensity = 0.55;
-            state.lidEdge.visible = true;
-            state.lidOutline.visible = false;
-            state.lidSheen.visible = false;
-            state.lidBadge.visible = true;
-            state.lidMat.envMapIntensity = 1.4;
-            state.renderer.setClearColor(0x000000, 0);
-            state.camBase.phi = 1.2;
-            state.camTarget.y = 0.9;
-            state.keyLight.color.setHex(0xffd9a0);
-            state.keyLight.intensity = 1.35;
-        }
-        state.plinthMat.needsUpdate = true;
-        state.groundMat.needsUpdate = true;
-        state.armMat.needsUpdate = true;
-        state.recordMat.needsUpdate = true;
-        state.recordSideMat.needsUpdate = true;
-        state.lidMat.needsUpdate = true;
-        state.lidEdgeMat.needsUpdate = true;
+        const retro = state.theme === "archive";
+        state.bodyVariants.archive.visible = retro;
+        state.bodyVariants.sky.visible = !retro;
+        state.design = retro ? "cream-retro" : "sakura-desktop";
+        state.renderer.domElement.ariaLabel = `${retro ? "奶油复古" : "浅粉桌面"}唱机，点按唱臂播放，拖动空白处环绕，在音量旋钮上滚动调节音量`;
+        state.plinthMat.color.setHex(0xf1d8e0);
+        state.topPlateMat.color.setHex(retro ? 0xf0e7d3 : 0xf7e5eb);
+        state.topPlateMat.roughness = retro ? .39 : .32;
+        state.hardwareMat.color.setHex(retro ? 0xc5b796 : 0xe1e4e2);
+        state.hardwareMat.metalness = .86;
+        state.hardwareMat.roughness = retro ? .32 : .24;
+        state.ivoryMat.color.setHex(retro ? 0xf3ebdb : 0xf7f4ed);
+        state.knobCapMat.color.setHex(retro ? 0xf5efdf : 0xfbf9f3);
+        state.armMat.color.setHex(retro ? 0xece3d0 : 0xf7f3e9);
+        state.armMat.metalness = .08;
+        state.armMat.roughness = .31;
+        state.footMat.color.setHex(retro ? 0xa9a08e : 0xd9d1ce);
+        state.inkMat.color.setHex(retro ? 0x716551 : 0x92777e);
+        state.groundMat.opacity = .13;
+        state.groundMesh.position.y = retro ? -.31 : -.17;
+        state.recordMat.transparent = false;
+        state.recordMat.opacity = 1;
+        state.recordMat.roughness = .27;
+        state.recordMat.metalness = .12;
+        state.recordMat.emissive.setHex(0x000000);
+        state.recordMat.emissiveIntensity = 0;
+        state.recordSideMat.color.setHex(0x131418);
+        state.platterFeltMat.color.setHex(retro ? 0x5f5c52 : 0x8b898a);
+        state.sheen.intensity = .4;
+        state.renderer.setClearColor(retro ? 0xf3efe7 : 0xeff4f4, 0);
+        state.camBase.phi = retro ? .97 : .94;
+        state.camBase.theta = retro ? .24 : .16;
+        state.keyLight.color.setHex(0xfffaf3);
+        state.keyLight.intensity = 1.7;
+        // 正面品牌标识属于复古机身，浅粉款则保留台面上的小字。
+        state.frontPanelMesh.rotation.x = retro ? 0 : -Math.PI / 2;
+        state.frontPanelMesh.position.set(retro ? 0 : .35, retro ? .25 : .61, retro ? 2.492 : 2.02);
+        state.frontPanelMesh.scale.setScalar(retro ? .64 : 1);
+        state.counterMesh.visible = !retro;
+        state.ledMesh.position.set(retro ? .24 : -2.55, retro ? .23 : .615, retro ? 2.495 : 1.9);
+        state.deck.add(state.ledMesh);
+        const activeKnobs = state.knobMeshes.filter(knob => {
+            let parent = knob;
+            while (parent && parent !== state.deck) {
+                if (!parent.visible) return false;
+                parent = parent.parent;
+            }
+            return true;
+        });
+        state.hitTargets = [...state.sharedHitTargets, ...activeKnobs, ...(retro ? [state.retroPower] : state.pinkSwitch)];
+        const previous = state.frontMat.map;
         state.frontMat.map = drawFrontPanel(state);
+        if (previous) previous.dispose();
         state.frontMat.needsUpdate = true;
         drawRecord(state);
         drawCounter(state);
-        drawLidHud(state);
+
+        // 换主题时取静止姿态的边界，正在换片或落针也不会把镜头推远。
+        state.frameVariants ||= {};
+        if (!state.frameVariants[state.theme]) {
+            const position = state.recordGroup.position.clone();
+            const rotation = state.recordGroup.rotation.y;
+            const angle = state.armSwingG.rotation.y, lift = state.armLiftG.position.y;
+            state.recordGroup.position.set(state.platterX, state.platterTop, .05);
+            state.recordGroup.rotation.y = 0;
+            state.armSwingG.rotation.y = state.armPark;
+            state.armLiftG.position.y = .42;
+            state.frameVariants[state.theme] = framingPoints(state.deck);
+            state.recordGroup.position.copy(position);
+            state.recordGroup.rotation.y = rotation;
+            state.armSwingG.rotation.y = angle;
+            state.armLiftG.position.y = lift;
+        }
+        state.framingPoints = state.frameVariants[state.theme];
+        state.renderer.domElement.width = 0;
         if (reducedMotion.matches) frame(state);
     }
 
@@ -1536,7 +1509,7 @@
         S.busy = true;
         S.demo = false;
         const needPark = S.needle !== "parked";
-        const t0 = needPark ? 450 : 80;
+        const t0 = needPark ? 300 : 60;
 
         if (needPark) {
             S.cur.armLiftT = 0.16;
@@ -1545,7 +1518,7 @@
 
         if (keepRecord) {
             /* DOM 飞片约 0.7s 落到转盘，贴着落点换纹理、转不停 */
-            setTimeout(() => {
+            motionAfter(S, () => {
                 S.coverImg = null;
                 if (track.coverArt) {
                     setTrack(track);
@@ -1554,25 +1527,25 @@
                     drawRecord(S);
                     miniSetCover(null);
                 }
-            }, t0 + 560);
-            setTimeout(() => {
+            }, t0 + 420);
+            motionAfter(S, () => {
                 S.needle = "parked";
                 S.cur.armLiftT = 0;
                 ledOff(S);
                 S.busy = false;
                 cb?.();
-            }, t0 + 700);
+            }, t0 + 520);
             return;
         }
 
         // 旧片升起并向左滑出
-        setTimeout(() => {
+        motionAfter(S, () => {
             S.cur.recordYT = 1.5;
             S.cur.recordXT = -4.5;
         }, t0);
 
         // 旧片飞出后换纹理，新片从上方落回转盘
-        setTimeout(() => {
+        motionAfter(S, () => {
             // 无封面的曲目要回到默认标签，别让上一张的封面留着
             S.coverImg = null;
             if (track.coverArt) {
@@ -1585,16 +1558,16 @@
             S.cur.spin = 0;
             S.cur.recordXT = 0;
             S.cur.recordYT = 0;
-        }, t0 + 650);
+        }, t0 + 300);
 
-        setTimeout(() => {
+        motionAfter(S, () => {
             S.needle = "parked";
             S.cur.armLiftT = 0;
             ledOff(S);
             S.cur.speedT = 0;
             S.busy = false;
             cb?.();
-        }, t0 + 1250);
+        }, t0 + 580);
     }
 
     /* 落针（对外）：把针落到当前进度并回调（一般用来启动音频）。 */
@@ -1609,6 +1582,9 @@
     /* ---------------- 播放状态监听 ---------------- */
 
     if (audio) {
+        audio.addEventListener("volumechange", () => {
+            if (S && S.awake && reducedMotion.matches) frame(S);
+        });
         audio.addEventListener("play", () => {
             playing = true;
             miniKick();
@@ -1631,13 +1607,12 @@
             // 播完自动回臂、转盘缓停
             if (S && S.awake && S.needle === "down") needleParkSequence(S);
         });
-        // 卸载曲目（关闭播放器）：针回架，盖子上的曲目窗也撤掉
+        // 卸载曲目（关闭播放器）后收针回架。
         audio.addEventListener("emptied", () => {
             lastTrackInfo = { title: "", artist: "" };
             if (!S) return;
             S.trackTitle = "";
             S.trackArtist = "";
-            drawLidHud(S);
             if (S.awake && S.needle !== "parked") needleParkSequence(S);
         });
     }
@@ -1660,7 +1635,7 @@
         S.camOffsetTgt.theta += delta;
     }
 
-    /* 转盘中心的屏幕坐标（clientX/Y）：唱片墙「飞片上机」的落点。 */
+    /* 转盘中心的屏幕坐标（clientX/Y）：选片后「飞片上机」的落点。 */
     function platterScreenPoint() {
         if (!S || !S.renderer) return null;
         const rect = S.renderer.domElement.getBoundingClientRect();
@@ -1690,6 +1665,8 @@
         dropNeedle,
         orbit,
         platterScreenPoint,
-        setEmptyDropHandler
+        setEmptyDropHandler,
+        setPlaybackHandler: handler => { playbackHandler = typeof handler === "function" ? handler : null; },
+        cancelMotion
     };
 })();

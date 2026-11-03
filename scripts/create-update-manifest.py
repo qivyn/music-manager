@@ -22,7 +22,7 @@ def create_manifest(version, directory, notes):
         if not decoded.startswith("untrusted comment:") or "trusted comment:" not in decoded:
             raise ValueError(f"Invalid signature format: {name}")
         platforms[target] = {
-            "url": f"https://github.com/AI-AQI/music-manager/releases/download/v{version}/{name}",
+            "url": f"https://github.com/qivyn/music-manager/releases/download/v{version}/{name}",
             "signature": signature,
         }
     return {

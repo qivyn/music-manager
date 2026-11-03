@@ -1,0 +1,216 @@
+/* The paintings remain intact; both themes use their own original image and hit map. */
+body[data-theme="cream"] {
+    --home-paper: #faf3e9;
+    --home-ink: #604e55;
+    --home-muted: #8b747b;
+    --home-accent: #966775;
+    --home-control: #f9f1ea;
+    --home-line: #b899a066;
+    --home-glass: #fff8f0ed;
+    --home-backdrop: url("assets/home-cat-cream-background-v1.png");
+}
+
+body[data-theme="night"] {
+    --home-paper: #374b77;
+    --home-ink: #f5e7d8;
+    --home-muted: #c1c6da;
+    --home-accent: #efcfb6;
+    --home-control: #39486b;
+    --home-line: #e7d5cf55;
+    --home-glass: #34435ff2;
+    --home-backdrop: url("assets/home-cat-night-background-v1.png");
+}
+
+.theme-menu { width: 190px; border-radius: 14px; }
+.theme-option { border-radius: 9px; }
+.settings-glyph, .appearance-glyph { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+/* Keep the appearance switch light, independent of filled workspace buttons. */
+body .top-actions .appearance-toggle {
+    width: 40px;
+    min-width: 40px;
+    flex-shrink: 0;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    color: var(--home-muted);
+    background: transparent;
+    box-shadow: none;
+}
+body .top-actions .appearance-toggle:hover {
+    color: var(--home-ink);
+    background: transparent;
+    border-color: var(--home-line);
+    box-shadow: none;
+}
+body .top-actions button.appearance-toggle:focus-visible {
+    outline: 2px solid var(--home-accent);
+    outline-offset: 3px;
+}
+.appearance-glyph path { fill: currentColor; stroke: none; }
+.theme-toggle:focus-visible { outline: 2px solid var(--primary-strong); outline-offset: 3px; }
+.cream-preview { background: #faf1e7; }
+.night-preview { background: #374b77; }
+.cream-preview i:first-child, .night-preview i:first-child { width: 24px; height: 20px; right: 3px; bottom: 1px; background: #e9ceb9; border-radius: 8px 8px 4px 4px; }
+.cream-preview i:nth-child(2), .night-preview i:nth-child(2) { width: 13px; height: 6px; right: 9px; bottom: 12px; background: #fff7ef; border-radius: 50%; }
+.cream-preview i:last-child, .night-preview i:last-child { width: 6px; height: 6px; left: 5px; bottom: 2px; background: #c18e9a; border-radius: 50%; }
+.scene-help-btn { display: none; }
+
+/* The scene fills the window behind a quiet utility header. */
+body.view-home { background: var(--home-paper); }
+body.view-home .topbar { background: transparent; padding: 0 4vw; }
+body.view-home .top-nav, body.view-home .brand-icon, body.view-home .brand-subtitle,
+body.view-home .settings-text, body.view-home .theme-toggle-chevron,
+body.view-home #playerBar { display: none; }
+body.view-home .brand-title { font-family: var(--font-display); font-size: 18px; font-weight: 500; letter-spacing: .14em; color: var(--home-ink); }
+body.view-home .top-actions { margin-left: auto; gap: 14px; }
+body.view-home .scene-help-btn,
+body.view-home .theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; min-width: 36px; padding: 0; border: 1px solid transparent; border-radius: 50%; color: var(--home-muted); background: transparent; cursor: pointer; }
+body.view-home .scene-help-btn { font: 15px var(--font-display); }
+body.view-home .scene-help-btn:hover,
+body.view-home .scene-help-btn[aria-expanded="true"],
+body.view-home .theme-toggle:hover { border-color: var(--home-line); color: var(--home-ink); }
+body.view-home .topbar #importBtn { border-color: var(--home-line); border-radius: 999px; padding: 8px 15px; font-size: 11px; font-weight: 400; }
+body.view-home .main, body.view-home .content { background: transparent; }
+body.view-home .content { perspective: none; }
+body.view-home .main-scroll-area { overflow: hidden; container-type: normal; }
+body.view-home .content-area { padding: 0; }
+body.view-home .app { padding-bottom: 0; }
+body.view-home .detail-panel { position: relative; z-index: 10; }
+
+.home-page.home-scene {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    isolation: isolate;
+    display: block;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--home-paper) var(--home-backdrop) center / cover no-repeat;
+}
+.scene-artboard {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    /* Only the empty painted backdrop covers the viewport. Keep the original
+       scene and its hit map contained, with a size cap on large windows. */
+    width: min(100vw, calc(100vh * 1586 / 992), 1240px);
+    aspect-ratio: 1586 / 992;
+}
+.scene-artwork {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    pointer-events: none;
+    /* Blend only the empty top/left of the painting into its matching painted
+       plate. The cat, sofa, yarn and rug remain completely opaque. */
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22%), linear-gradient(to right, transparent, #000 28%);
+    -webkit-mask-composite: source-in;
+    mask-image: linear-gradient(to bottom, transparent, #000 22%), linear-gradient(to right, transparent, #000 28%);
+    mask-composite: intersect;
+}
+.scene-targets, .scene-target { position: absolute; inset: 0; pointer-events: none; }
+.scene-motion-patch {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    /* The fixed perimeter matches the image below; a soft edge prevents a seam. */
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 2%, #000 96%, transparent), linear-gradient(to right, transparent, #000 4%, #000 96%, transparent);
+    -webkit-mask-composite: source-in;
+    mask-image: linear-gradient(to bottom, transparent, #000 2%, #000 96%, transparent), linear-gradient(to right, transparent, #000 4%, #000 96%, transparent);
+    mask-composite: intersect;
+}
+@media (prefers-reduced-motion: reduce) {
+    .scene-motion-patch { display: none; }
+}
+.settings-action:disabled { opacity: .55; cursor: default; }
+.scene-pet-feedback {
+    position: absolute;
+    z-index: 4;
+    width: clamp(18px, 2vw, 26px);
+    color: var(--home-accent);
+    opacity: .85;
+    transform: translate(-50%, -12px);
+    pointer-events: none;
+}
+.scene-pet-feedback[hidden] { display: none; }
+.scene-pet-feedback svg { display: block; width: 100%; height: auto; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+body.scene-motion-enabled .scene-pet-feedback.is-animated { animation: scene-pet-heart 1800ms ease-out both; }
+.scene-pet-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes scene-pet-heart {
+    0% { opacity: 0; transform: translate(-50%, 2px) scale(.8) rotate(-7deg); }
+    18% { opacity: .85; }
+    70% { opacity: .65; }
+    100% { opacity: 0; transform: translate(-50%, -30px) scale(1.03) rotate(5deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    body.scene-motion-enabled .scene-pet-feedback.is-animated { animation: none; opacity: .85; transform: translate(-50%, -12px); }
+}
+.scene-hotspot { position: absolute; border: 0; padding: 0; background: transparent; cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+.scene-hotspot:hover, .scene-hotspot:focus-visible { background: transparent; outline: none; }
+.scene-hover-glow { position: absolute; pointer-events: none; opacity: 0; filter: blur(clamp(6px, .8vw, 11px)); }
+.scene-hover-shape { display: block; width: 100%; height: 100%; background: #fff5e512; pointer-events: none; }
+.scene-target:has(.scene-hotspot:hover) .scene-hover-glow,
+.scene-target:has(.scene-hotspot:focus-visible) .scene-hover-glow { opacity: 1; }
+body.scene-motion-enabled .scene-hover-glow { transition: opacity 180ms ease; }
+@media (prefers-reduced-motion: reduce) {
+    body.scene-motion-enabled .scene-hover-glow { transition: none; }
+}
+.scene-cat-focus { position: absolute; width: 12px; height: 12px; border: 2px solid var(--home-accent); border-radius: 50%; transform: translate(-50%, -100%); opacity: 0; pointer-events: none; }
+.scene-target:has(.scene-hotspot-cat:focus-visible) .scene-cat-focus { opacity: 1; }
+.scene-label { position: absolute; z-index: 5; transform: translate(-50%, -110%); display: block; padding: 8px 13px; border: 1px solid var(--home-line); border-radius: 999px; background: var(--home-glass); color: var(--home-ink); font-size: 12px; font-weight: 400; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: none; box-shadow: 0 3px 18px #171a2710; }
+.scene-label::after { content: ""; position: absolute; width: 4px; height: 4px; bottom: -8px; left: calc(50% - 2px); border-radius: 50%; background: var(--home-accent); }
+.scene-target:has(.scene-hotspot:hover) .scene-label,
+.scene-target:has(.scene-hotspot:focus-visible) .scene-label,
+.show-scene-entrances .scene-label { opacity: 1; visibility: visible; }
+.scene-target:has(.scene-hotspot:focus-visible) .scene-label { outline: 2px solid var(--home-accent); outline-offset: 3px; }
+
+.home-scene .home-now-playing { position: absolute; z-index: 2; top: 34%; left: 8%; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 0; width: 32%; max-width: 420px; padding: 0; margin: 0; }
+.scene-eyebrow { margin: 0 0 22px; color: var(--home-muted); font-size: 12px; font-weight: 400; letter-spacing: .22em; }
+.home-scene #homeTrackTitle { margin: 0; max-width: 100%; color: var(--home-ink); font-family: var(--font-display); font-weight: 400; font-size: clamp(25px, 3vw, 43px); line-height: 1.5; letter-spacing: .04em; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.home-scene #homeTrackTitle:focus { outline: none; }
+.home-scene .home-track-info { width: 100%; }
+.home-scene .home-track-meta { margin: 12px 0 0; color: var(--home-muted); font-size: 12px; line-height: 1.8; letter-spacing: .04em; }
+.home-scene .home-transport { display: flex; width: auto; justify-content: flex-start; margin-top: 30px; gap: 23px; }
+.home-scene .home-transport-btn { width: 32px; height: 36px; color: var(--home-ink); }
+.home-scene .home-transport-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.home-scene .home-play-btn { width: 52px; height: 52px; color: var(--home-control); background: var(--home-ink); box-shadow: none; }
+.home-scene .home-play-btn:hover { background: var(--home-accent); }
+.home-scene .home-play-btn span { font-size: 17px; }
+.home-timeline { width: 100%; max-width: 300px; margin-top: 21px; }
+.home-scene #homeSeek { appearance: none; -webkit-appearance: none; display: block; width: 100%; height: 22px; padding: 9px 0; margin: 0; border: 0; background: transparent; cursor: pointer; }
+.home-scene #homeSeek::-webkit-slider-runnable-track { height: 2px; border-radius: 2px; background: linear-gradient(to right, var(--home-accent) var(--progress, 0%), var(--home-line) var(--progress, 0%)); }
+.home-scene #homeSeek::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; height: 8px; width: 8px; margin-top: -3px; border-radius: 50%; background: var(--home-accent); }
+.home-scene #homeSeek:disabled { opacity: .55; cursor: default; }
+.home-timeline-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--home-muted); font-size: 10px; line-height: 1.6; }
+.home-scene .home-track-time { min-width: 0; margin: 0; font-size: 10px; }
+body.view-home .home-scene .home-import-btn { margin-top: 28px; padding: 10px 18px; border-radius: 999px; border: 1px solid var(--home-line); background: transparent; color: var(--home-ink); font-size: 12px; font-weight: 400; }
+.home-scene .home-import-btn span { margin-left: 10px; }
+.scene-discovery { position: absolute; z-index: 3; bottom: 5%; left: 8%; display: flex; align-items: center; gap: 12px; color: var(--home-muted); }
+.scene-discovery[hidden] { display: none; }
+.scene-discover-btn, .scene-dismiss-btn { padding: 6px 0; border: 0; background: transparent; color: inherit; font: 11px/1.5 var(--font-ui); cursor: pointer; }
+.scene-discover-btn span { padding-right: 7px; font-size: 16px; }
+.scene-dismiss-btn { min-width: 28px; min-height: 28px; font-size: 16px; }
+.home-scene button:focus-visible, .scene-help-btn:focus-visible { outline: 2px solid var(--home-accent); outline-offset: 4px; }
+.home-scene .scene-hotspot:focus-visible { outline: none; }
+
+@media (max-aspect-ratio: 6/5) {
+    .home-scene .home-now-playing { top: 18%; width: 48%; }
+    .scene-discovery { top: 11%; bottom: auto; }
+}
+@media (min-aspect-ratio: 2/1) {
+    .home-scene .home-now-playing { left: 7%; width: 29%; top: 31%; }
+    .scene-discovery { left: 7%; }
+}
+@media (max-height: 660px) {
+    .home-scene .home-now-playing { top: 29%; }
+    .scene-eyebrow { margin-bottom: 12px; }
+    .home-scene .home-transport { margin-top: 18px; }
+    .home-timeline { margin-top: 12px; }
+}

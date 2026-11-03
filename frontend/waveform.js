@@ -1,7 +1,7 @@
 /* =========================================================
    波形 — Musicbed 式音频波形
    - 底部播放器：整曲波形 + 播放进度 + 点击/拖动跳转
-   - 音乐行内：静态灰色小波形（懒解码、限并发、按 URL 缓存）
+   - 音乐行内：随主题配色的小波形（懒解码、限并发、按 URL 缓存）
    独立于 app.js 运行；解码失败的曲目静默留空，不影响交互。
 ========================================================= */
 
@@ -90,9 +90,10 @@
         }).then(peaks => {
             peaksCache.set(key, peaks);
             return peaks;
+        }).finally(() => {
+            peaksPending.delete(key);
         });
         peaksPending.set(key, promise);
-        promise.finally(() => peaksPending.delete(key));
         return promise;
     }
 
@@ -127,8 +128,10 @@
         const n = peaks.length;
         const barW = w / n;
         const mid = h / 2;
-        const playedColor = cssColor("--primary-strong", "#4f46e5");
-        const restColor = cssColor("--subtext", "#8a90a5");
+        const playedColor = cssColor("--waveform-played", "#815763");
+        const restColor = cssColor("--waveform-rest", "#987887");
+        // Dedicated opaque colors keep fine bars visible on light surfaces.
+        ctx.globalAlpha = 1;
 
         for (let i = 0; i < n; i++) {
             const ratio = i / n;
@@ -136,7 +139,6 @@
             const inRange = range && ratio >= range.from && ratio <= range.to;
             const played = progressRatio > 0 && ratio <= progressRatio;
             const lit = played || inRange;
-            ctx.globalAlpha = played ? 1 : inRange ? 0.9 : 0.42;
             ctx.fillStyle = lit ? playedColor : restColor;
             ctx.fillRect(
                 i * barW + barW * 0.18,
@@ -151,6 +153,7 @@
     /* ---------------- 播放器波形 ---------------- */
 
     const waveCanvas = document.getElementById("playerWave");
+    let redrawPlayer = () => {};
 
     if (waveCanvas && audio) {
         const PLAYER_BUCKETS = 320;
@@ -167,6 +170,7 @@
         function redraw() {
             drawBars(waveCanvas, currentPeaks, currentRatio());
         }
+        redrawPlayer = redraw;
 
         function seekTo(event) {
             const rect = waveCanvas.getBoundingClientRect();
@@ -215,17 +219,12 @@
             currentPeaks = null;
             redraw();
         });
-
-        window.addEventListener("resize", redraw);
-
-        // 主题切换后重取 CSS 颜色
-        new MutationObserver(redraw)
-            .observe(document.body, { attributes: true, attributeFilter: ["data-theme"] });
     }
 
     /* ---------------- 行内小波形 ---------------- */
 
     const ROW_BUCKETS = 140;
+    const rowWaves = new WeakMap();
 
     function hydrateRowWave(canvas) {
         if (canvas.dataset.waveDone) return;
@@ -239,6 +238,7 @@
             : null;
         getPeaks(url, ROW_BUCKETS)
             .then(peaks => {
+                rowWaves.set(canvas, { peaks, range });
                 if (canvas.isConnected) drawBars(canvas, peaks, 0, range);
             })
             .catch(() => {
@@ -264,6 +264,19 @@
     }
 
     document.querySelectorAll("canvas.row-wave").forEach(hydrateRowWave);
+
+    // Canvas pixels do not follow CSS changes; repaint cached rows as well as
+    // the player, including while playback is paused. No audio decoding needed.
+    function redrawWaves() {
+        redrawPlayer();
+        document.querySelectorAll("canvas.row-wave").forEach(canvas => {
+            const wave = rowWaves.get(canvas);
+            if (wave) drawBars(canvas, wave.peaks, 0, wave.range);
+        });
+    }
+    window.addEventListener("resize", redrawWaves);
+    new MutationObserver(redrawWaves)
+        .observe(document.body, { attributes: true, attributeFilter: ["data-theme"] });
 
     // 供唱机模块复用峰值解码（唱片纹槽）
     window.Waveform = { getPeaks };

@@ -44,7 +44,8 @@
 
     async function invoke(cmd, args = {}) {
         switch (cmd) {
-            case "init_db": return null;
+            case "init_db": return true;
+            case "check_app_update": return { currentVersion: "本地预览", version: null };
             case "get_database_path": return "/Users/qi/Library/Application Support/com.musicmanager.app/library.db";
             case "sync_library_locations": return { updatedPaths: 0, updatedAlbums: 0 };
             case "list_music": return music;
@@ -90,6 +91,7 @@
 
     window.__TAURI__ = {
         core: { invoke, convertFileSrc: p => p },
+        event: { listen: async () => () => {} },
         dialog: { ask: async () => false, message: async () => {}, open: async () => null },
         opener: { revealItemInDir: async () => {} },
         window: { getCurrentWindow: () => ({ onDragDropEvent: async () => () => {}, listen: async () => () => {} }) }
@@ -106,14 +108,14 @@
         Object.defineProperty(window, "Turntable", { get: () => undefined, set: () => {}, configurable: true });
     }
 
-    const MAX_RAF_FRAMES = Number(params.get("frames") || 60);
+    const MAX_RAF_FRAMES = params.has("frames") ? Number(params.get("frames")) : Infinity;
     let rafCount = 0;
     const nativeRaf = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = cb => (++rafCount > MAX_RAF_FRAMES ? 0 : nativeRaf(cb));
 
     function whenContentReady(fn) {
         const timer = setInterval(() => {
-            if (document.querySelector(".home-hero, .music-list, .music-grid, .empty-state")) {
+            if (document.querySelector(".home-scene, .music-list, .music-grid, .empty-state")) {
                 clearInterval(timer);
                 fn();
             }
@@ -128,9 +130,6 @@
             if (view && view !== "home") {
                 if (params.get("dive") && typeof goToViewFromHome === "function") goToViewFromHome(view);
                 else document.querySelector(`.nav-item[data-view="${view}"]`)?.click();
-            }
-            if (params.get("crate")) {
-                setTimeout(() => document.querySelector('[data-home-action="crate"]')?.click(), 300);
             }
         });
     });

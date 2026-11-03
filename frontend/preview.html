@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>声场档案</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="themes.css">
+    <link rel="stylesheet" href="home-scene.css">
 </head>
 
 <body>
@@ -34,70 +36,59 @@
 
         <nav class="top-nav" aria-label="主导航">
             <button class="nav-item active" data-view="home">
-                <span class="top-nav-idx" aria-hidden="true">01</span>
                 <span>首页</span>
             </button>
 
             <button class="nav-item" data-view="all">
-                <span class="top-nav-idx" aria-hidden="true">02</span>
                 <span>全部音乐</span>
                 <span class="nav-count" id="allCount"><span class="nav-count-value">0</span></span>
             </button>
 
             <button class="nav-item" data-view="clips">
-                <span class="top-nav-idx" aria-hidden="true">03</span>
                 <span>音乐片段</span>
                 <span class="nav-count" id="clipCount"><span class="nav-count-value">0</span></span>
             </button>
 
             <button class="nav-item" data-view="albums">
-                <span class="top-nav-idx" aria-hidden="true">04</span>
                 <span>专辑</span>
             </button>
 
             <button class="nav-item" data-view="recent">
-                <span class="top-nav-idx" aria-hidden="true">05</span>
-                <span>最近添加</span>
+                <span>最近</span>
             </button>
         </nav>
 
         <div class="top-actions">
-            <div class="studio-status"><span></span> LOCAL ARCHIVE</div>
+            <button id="sceneHelpBtn" class="scene-help-btn" type="button" aria-label="查看场景入口" aria-controls="homeScene" aria-expanded="false" title="查看场景入口">?</button>
+            <button id="themeToggleBtn" class="theme-toggle appearance-toggle" type="button" aria-label="切换到月夜打盹" title="切换到月夜打盹">
+                <svg class="appearance-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z"/></svg>
+            </button>
             <div class="theme-switcher">
                 <button
-                    id="themeToggleBtn"
+                    id="settingsToggleBtn"
                     class="theme-toggle"
                     type="button"
                     aria-expanded="false"
-                    aria-controls="themeMenu"
-                    aria-label="切换主题"
-                    title="切换主题"
+                    aria-controls="settingsMenu"
+                    aria-haspopup="menu"
+                    aria-label="设置"
+                    title="设置"
                 >
-                    <span class="theme-toggle-swatch" aria-hidden="true"></span>
-                    <span id="themeToggleLabel">档案室</span>
+                    <svg class="settings-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.6 2.4-2 .9L4 5.6 2 9l1.8 1.7v2.6L2 15l2 3.4 2.4-.7 2 .9L9 21h6l.6-2.4 2-.9 2.4.7 2-3.4-1.8-1.7v-2.6L22 9l-2-3.4-2.4.7-2-.9L15 3Z"/><circle cx="12" cy="12" r="3"/></svg><span class="settings-text">设置</span>
                     <span class="theme-toggle-chevron" aria-hidden="true">⌄</span>
                 </button>
-                <div id="themeMenu" class="theme-menu hidden" role="menu" aria-label="选择界面主题">
-                    <div class="theme-menu-label">APPEARANCE</div>
-                    <button class="theme-option" type="button" role="menuitemradio" data-theme="archive" aria-checked="true">
-                        <span class="theme-preview archive-preview" aria-hidden="true"><i></i><i></i><i></i></span>
-                        <span><strong>档案室</strong><small>暖纸、墨黑、朱红</small></span>
-                        <b aria-hidden="true">✓</b>
-                    </button>
-                    <button class="theme-option" type="button" role="menuitemradio" data-theme="sky" aria-checked="false">
-                        <span class="theme-preview sky-preview" aria-hidden="true"><i></i><i></i><i></i></span>
-                        <span><strong>云雾</strong><small>天青、雾白、暮紫</small></span>
-                        <b aria-hidden="true">✓</b>
-                    </button>
+                <div id="settingsMenu" class="theme-menu hidden" role="menu" aria-label="设置">
+                    <button id="sceneMotionBtn" class="settings-action" type="button" role="menuitemcheckbox" aria-checked="true" tabindex="-1">场景微动效<span aria-hidden="true">开</span></button>
+                    <button id="shortcutHelpBtn" class="settings-action" type="button" role="menuitem" tabindex="-1">快捷键<span aria-hidden="true">?</span></button>
+                    <button id="checkUpdateBtn" class="settings-action" type="button" role="menuitem" tabindex="-1">检查更新</button>
                 </div>
             </div>
             <button id="openCandidatePanelBtn" class="secondary-btn candidate-panel-trigger" type="button" title="候选清单" aria-label="打开候选清单" aria-expanded="false">
                 <span aria-hidden="true">★</span>
                 <span id="candidateNavCount" class="candidate-trigger-count">0</span>
             </button>
-            <button id="shortcutHelpBtn" class="secondary-btn shortcut-help-trigger" type="button" title="快捷键（按 ? 打开）" aria-label="快捷键帮助">?</button>
             <button id="importBtn" class="primary-btn">
-                <span class="button-index">01</span> 导入曲目
+                导入曲目
             </button>
         </div>
     </header>
@@ -320,10 +311,6 @@
                 00:00 / 00:00
             </span>
 
-            <button id="playerLoopBtn" class="player-btn" title="片段循环（AB）" disabled>
-                AB
-            </button>
-
             <button id="playerAddCandidateBtn" class="player-btn" title="加入候选">
                 ＋
             </button>
@@ -346,7 +333,7 @@
             <span>本地数据库</span>
             <span id="databasePath">正在读取数据库位置…</span>
         </button>
-        <button id="changeDbLocationBtn" class="database-path-change" type="button" title="更改数据库位置">更改位置</button>
+        <button id="changeDbLocationBtn" class="database-path-change" type="button" title="打开所选文件夹的音乐库，不搬迁或覆盖当前数据库">切换音乐库</button>
     </div>
 
 </div>
@@ -355,6 +342,26 @@
 <!-- ============================= -->
 <!-- 快捷键速查 -->
 <!-- ============================= -->
+
+<div id="updateModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+    <div class="modal-box small">
+        <div class="modal-header">
+            <h2 id="updateTitle">软件更新</h2>
+            <button id="closeUpdateBtn" class="icon-btn" type="button" aria-label="关闭更新窗口">×</button>
+        </div>
+        <div class="modal-body update-body">
+            <p id="updateVersion">声场档案</p>
+            <p id="updateStatus" role="status" aria-live="polite"></p>
+            <progress id="updateProgress" aria-label="更新下载进度" hidden></progress>
+            <span id="updateProgressLabel" hidden></span>
+            <div id="updateNotes" class="update-notes" hidden></div>
+        </div>
+        <div class="modal-footer">
+            <button id="updateRecheckBtn" class="secondary-btn" type="button" hidden>重新检查</button>
+            <button id="updateActionBtn" class="primary-btn" type="button">检查更新</button>
+        </div>
+    </div>
+</div>
 
 <div id="shortcutsModal" class="modal hidden">
 
@@ -651,13 +658,14 @@
 <div id="toast" class="toast"></div>
 
 
-<script src=".preview/mock-tauri.js"></script>
-    <script src="vendor/three.min.js"></script>
 <script src="soundfield.js"></script>
 <script src="waveform.js"></script>
-<script src="turntable.js"></script>
-<script src="vinylwall.js"></script>
+<script src="home-scene-motion.js"></script>
+<script src="home-scene.js"></script>
+<script src="theme-transition.js"></script>
+<script src=".preview/mock-tauri.js"></script>
 <script src="app.js"></script>
+<script src="updater.js"></script>
 
 </body>
 </html>
