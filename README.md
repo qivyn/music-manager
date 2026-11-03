@@ -138,7 +138,19 @@ cd src-tauri && cargo tauri dev
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
+波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
+
+完整前端回归：`node --test scripts/test-*.cjs`。`scripts/test-review-regressions.cjs` 覆盖详情异步加载与连续保存、关闭编辑确认、播放取消与队列、拖入导入、失败重试、批量删除、播放历史缓存、导入专辑来源及预览生成。`src-tauri/src/commands_regression_tests.rs` 覆盖 WAV 原文件保护与完整输出、标签事务回滚、大库标签统计、专辑移动及离线资料编辑；发布流程会运行这些检查。
+
+交叉操作回归还覆盖自动保存与快速/批量标签同时写入、重新绑定文件时继续编辑、慢专辑探测后的手动修改与草稿保留、导入期间的编辑锁定及失败恢复，以及保存、探测或整批导入尚未结束时准备更新。更新会等待已经接受的完整操作；其中任何写入失败都会中止更新并恢复界面。导入批次执行期间暂时锁定曲目资料和专辑来源，完成或失败后恢复编辑。
+
+面板与播放回归从实际按钮事件进入，覆盖列表、详情和片段面板的乱序读取、读取中发生保存或删除、关闭后迟到响应、Finder 同步时切换选择与保留草稿，以及删除当前或无关曲目时保留仍有效的试听和队列位置。详情与片段面板在同一次校验中提交记录和界面；片段编辑器及资料弹窗也会拒绝旧加载、旧保存和旧音频回调影响较新的编辑。
+
+首页现在使用「奶油留白 / 月夜打盹」双主题插画，沙发进入音乐库、地毯进入最近播放、毛线球进入音乐片段。两个主题均有猫咪呼吸、尾尖轻摆及点击轻蹭互动，可关闭并遵循系统减少动态效果偏好。布局和入口说明见 [猫咪首页原型](docs/design/home-scene-layout.md)。回归检查：`node --test scripts/test-home-audition.cjs scripts/test-home-scene.cjs scripts/test-home-scene-motion.cjs`，包含切歌、取消、暂停续播、文件缺失、无唱机播放路径、双主题入口归属及动画生命周期；旧唱机模块保留但不再由应用入口加载。这些检查不替代真实窗口的视觉与交互验收。
+
 ### 打包
+
+应用图标使用与奶油色首页一致的「蜷睡白猫与灰玫瑰色音符」，采用轻柔的奶油白和浅暖色阴影，无装饰边框、深色猫咪描边或唱片元素。插画原图为 `src-tauri/app-icon-artwork.png`，生成提示词见 [图标设计记录](docs/design/app-icon.prompt.txt)。修改插画后，在项目根目录运行 `node scripts/generate-app-icons.cjs`，通过无描边的圆角裁切生成 `src-tauri/app-icon.png`，并同步生成开发模式 Dock 和各平台打包图标。
 
 发布前同步更新 `src-tauri/Cargo.toml`、`Cargo.lock` 与 `src-tauri/tauri.conf.json` 的版本号，再创建相同版本的 `v` 标签。GitHub Actions 分别在 Apple Silicon 和 Intel runner 上测试、构建应用及图形化安装 DMG。
 

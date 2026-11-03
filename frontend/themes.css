@@ -1,0 +1,290 @@
+/* Workspace palettes follow the paintings. Keep paint-specific colors in
+   home-scene.css; these semantic tokens also serve dialogs and the player. */
+body[data-theme="cream"] {
+    color-scheme: light;
+    --bg: var(--home-paper);
+    --panel: #fbf1e7;
+    --surface: #f8e9de;
+    --surface-strong: #fff8ef;
+    --chrome: var(--home-paper);
+    --border: #e4d0cb;
+    --border-strong: #b899a0;
+    --text: var(--home-ink);
+    --subtext: #745f66;
+    --hover: #f2dfd9;
+    --primary: var(--home-accent);
+    --primary-hover: #835865;
+    --primary-strong: #815763;
+    --primary-2: #b17f8b;
+    --primary-grad: var(--primary);
+    --on-primary: #fffdf8;
+    --primary-light: #f1dedf;
+    --primary-soft: #ddbec8;
+    --ring: #96677526;
+    --tag: #e9dfe9;
+    --tag-text: #705b76;
+    --danger: #9d484e;
+    --danger-soft: #f3e1df;
+    --warning: #82612f;
+    --warning-soft: #f3e8d2;
+    --ink: var(--home-ink);
+    --acid: #f3dcd0;
+    --player-surface: #f4e5db;
+    --waveform-rest: #987887;
+    --waveform-played: var(--primary-strong);
+    --cover-a: #f3dcd0;
+    --cover-b: #e5d8e2;
+    --cover-c: #f5e3ce;
+    --cover-ink: #68536f;
+    --scrim: #39303966;
+    --tooltip: var(--home-ink);
+    --tooltip-text: var(--home-paper);
+    --shadow-sm: 0 3px 12px #5e414507;
+    --shadow-md: 0 10px 28px #5e414514;
+    --shadow-lg: 0 22px 60px #46334126;
+}
+
+body[data-theme="night"] {
+    color-scheme: dark;
+    --bg: var(--home-paper);
+    --panel: #4a5981;
+    --surface: #42537c;
+    --surface-strong: #526088;
+    --chrome: var(--home-paper);
+    --border: #e7d5cf26;
+    --border-strong: #a7a7c1;
+    --text: var(--home-ink);
+    --subtext: #e1dfe9;
+    --hover: #53618a;
+    --primary: var(--home-accent);
+    --primary-hover: #f5dec9;
+    --primary-strong: #f0d2bd;
+    --primary-2: #d2b4a8;
+    --primary-grad: var(--primary);
+    --on-primary: var(--home-control);
+    --primary-light: #5a5675;
+    --primary-soft: #9584a3;
+    --ring: #efcfb61f;
+    --tag: #635d7b;
+    --tag-text: #f4e4ee;
+    --danger: #ffd1d5;
+    --danger-soft: #72545e;
+    --warning: #f5e0bb;
+    --warning-soft: #696153;
+    --ink: var(--home-control);
+    --acid: #efcfb6;
+    --player-surface: #46557e;
+    --waveform-rest: #b7b4ce;
+    --waveform-played: var(--primary-strong);
+    --cover-a: #d2b4a8;
+    --cover-b: #b2a0bd;
+    --cover-c: #e4c6ab;
+    --cover-ink: #423653;
+    --scrim: #29376355;
+    --tooltip: var(--home-ink);
+    --tooltip-text: var(--home-control);
+    --shadow-sm: none;
+    --shadow-md: 0 6px 20px #29376312;
+    --shadow-lg: 0 16px 40px #29376326;
+}
+
+body:is([data-theme="cream"], [data-theme="night"]) {
+    --r-sm: 7px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-xl: 18px;
+    color: var(--text);
+    background: var(--bg);
+}
+body:is([data-theme="cream"], [data-theme="night"])::before,
+body:is([data-theme="cream"], [data-theme="night"]) .spatial-atmosphere { display: none; }
+body:is([data-theme="cream"], [data-theme="night"]) ::selection { color: var(--text); background: var(--primary-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) ::-webkit-scrollbar-thumb { background-color: var(--border-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) ::-webkit-scrollbar-thumb:hover { background-color: var(--subtext); }
+
+/* Surfaces: quiet surround, a distinct reading surface, and raised controls. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(.app, .main, .content) { background: var(--bg); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.topbar, .sidebar, .toolbar, .database-path) {
+    color: var(--text);
+    background: var(--chrome);
+    border-color: var(--border);
+    box-shadow: none;
+}
+body:is([data-theme="cream"], [data-theme="night"]) .topbar::after { background: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar { border-right: 1px solid var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.brand-title, .music-name, .card-name, .clip-library-name, .clip-item-name, .candidate-item-name, .selected-file-name, .detail-name, .detail-title, .modal-header h2, .catalog-detail-title, .empty-title, .detail-value, label) { color: var(--text); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.brand-subtitle, .page-description, .music-meta, .card-meta, .clip-library-source-name, .clip-library-meta, .detail-path, .detail-section-title, .detail-edit-hint, .clip-time, .candidate-item-meta, .selected-file-size, .clip-editor-source, .clip-current-time, .catalog-detail-count, .empty-small, .suggestion-title, .tag-result-heading, .import-track-number, .theme-menu-label, .theme-toggle-chevron) { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) .music-meta > span + span::before { color: var(--border-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) .page-header { border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) .page-header h1 { font-weight: 500; font-size: clamp(28px, 3vw, 36px); line-height: 1.2; }
+body:is([data-theme="cream"], [data-theme="night"]) .result-info { color: var(--subtext); padding: 6px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 99px; font-weight: 500; }
+body:is([data-theme="cream"], [data-theme="night"]) .result-info::before { display: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .brand-icon { color: var(--primary-strong); background: var(--primary-light); border-color: var(--primary-soft); box-shadow: none; text-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.brand-icon::before, .brand-icon::after, .topbar .primary-btn::after, .music-list::after) { display: none; }
+
+/* Navigation and tag tree retain visible hierarchy in both palettes. */
+body:is([data-theme="cream"], [data-theme="night"]) .top-nav .nav-item { color: var(--subtext); font-weight: 500; }
+body:is([data-theme="cream"], [data-theme="night"]) .top-nav .nav-item:is(:hover, .active) { color: var(--primary-strong); background: transparent; }
+body:is([data-theme="cream"], [data-theme="night"]) .top-nav .nav-count { color: inherit; border-color: var(--border-strong); opacity: 1; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.sidebar-title, .sidebar-tag-dimension-icon, .sidebar-tag-dimension-name, .sidebar-tag-dimension-toggle, .sidebar-tag-caret, .sidebar-tag, .sidebar-tag-count, .sidebar-tag-dimension-selected, .sidebar-tag-ops button) { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.sidebar-tag-dimension, .sidebar-tag-checkbox) { border-color: var(--border-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag-dimension { border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.sidebar-tag-name, .sidebar-tag-input) { color: var(--text); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.sidebar-tag, .sidebar-tag-caret, .sidebar-tag-dimension-toggle, .sidebar-tag-ops button):hover { color: var(--text); background: var(--hover); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag-dimension-row:hover :is(.sidebar-tag-dimension-icon, .sidebar-tag-dimension-name, .sidebar-tag-dimension-toggle) { color: var(--text); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag.is-selected { background: var(--primary-light); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag.is-selected :is(.sidebar-tag-name, .sidebar-tag-count) { color: var(--primary-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag:hover .sidebar-tag-count { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag.is-selected .sidebar-tag-checkbox { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag-dimension-pill { color: var(--primary-strong); background: var(--primary-light); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.sidebar-tag-row, .sidebar-tag-dimension-row).is-drop-target { background: var(--primary-light); }
+body:is([data-theme="cream"], [data-theme="night"]) .sidebar-tag-ops :is([data-sidebar-tag-delete], [data-dimension-delete]):hover { color: var(--danger); background: var(--danger-soft); }
+
+/* Inputs, search, and compact toolbar controls. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(input, select, textarea) { color: var(--text); background-color: var(--surface-strong); border-color: var(--border-strong); accent-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(input, textarea)::placeholder { color: var(--subtext); opacity: 1; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.modal-body input, .modal-body select, .detail-edit input, .tag-input-row input, .bulk-tag-controls input, .timeline-time input, .clip-range-summary input, .clip-name-field input) { border-radius: var(--r-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(input, select, textarea):focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); outline: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .search-box { color: var(--subtext); background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .search-box:focus-within { background: var(--surface-strong); border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.search-box input, .catalog-filter input, .sidebar-tag-input, .quick-tag-editor input) { background: transparent; box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.search-key, .timeline-buttons kbd, .shortcut-row kbd) { color: var(--subtext); background: var(--surface); border-color: var(--border); border-radius: 4px; }
+body:is([data-theme="cream"], [data-theme="night"]) .clear-search { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) .view-buttons { background: var(--surface); border-color: var(--border); border-radius: var(--r-md); }
+body:is([data-theme="cream"], [data-theme="night"]) .view-btn { color: var(--subtext); border-radius: var(--r-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) .view-btn.active { color: var(--primary-strong); background: var(--primary-light); box-shadow: none; }
+
+/* Button color pairs are explicit: pale accents on night use dark text. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(.primary-btn, .secondary-btn, .theme-toggle, .settings-action, .sidebar-collapse-btn, .sidebar-tag-add-dimension, .catalog-item, .import-album-item) { border-radius: var(--r-sm); font-weight: 500; }
+body:is([data-theme="cream"], [data-theme="night"]) .primary-btn { color: var(--on-primary); background: var(--primary); border-color: var(--primary); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .primary-btn:hover { color: var(--on-primary); background: var(--primary-hover); border-color: var(--primary-hover); transform: none; box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.secondary-btn, .icon-btn, .icon-action, .theme-toggle, .sidebar-collapse-btn, .sidebar-tag-add-dimension) { color: var(--text); background: var(--surface); border-color: var(--border-strong); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.secondary-btn, .icon-btn, .icon-action, .theme-toggle, .sidebar-collapse-btn, .sidebar-tag-add-dimension):hover { color: var(--primary-strong); background: var(--hover); border-color: var(--primary); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]):not(.view-home) .top-actions .candidate-panel-trigger:not(.is-active):hover { color: var(--primary-strong); background: var(--hover); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.secondary-btn.is-active, .secondary-btn.active, .secondary-btn[aria-pressed="true"], .icon-action.is-playing, .icon-action.info-strong, .theme-toggle[aria-expanded="true"]) { color: var(--primary-strong); background: var(--primary-light); border-color: var(--primary-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.icon-action.is-candidate, .candidate-panel-trigger.is-active) { color: var(--warning); background: var(--warning-soft); border-color: var(--warning); }
+body:is([data-theme="cream"], [data-theme="night"]) .candidate-trigger-count { color: var(--on-primary); background: var(--primary); border-color: var(--chrome); }
+body:is([data-theme="cream"], [data-theme="night"]) .text-btn { color: var(--primary-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) .danger-btn { color: var(--danger); }
+body:is([data-theme="cream"], [data-theme="night"]) .danger-btn:hover { color: var(--danger); background: var(--danger-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) button:not(.scene-hotspot):focus-visible { outline: 2px solid var(--primary-strong); outline-offset: 3px; }
+body:is([data-theme="cream"], [data-theme="night"]) button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .primary-btn:disabled { background: var(--primary); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .secondary-btn:disabled { color: var(--subtext); background: var(--surface); border-color: var(--border); }
+
+/* Library surfaces and states; selection never falls back to the old orange. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-list, .music-card, .clip-library-row, .clip-item, .candidate-item, .selected-file-card, .empty-state) { color: var(--text); background: var(--panel); border-color: var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) .music-row { border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) .music-row::before { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-row, .music-card, .clip-library-row, .clip-item, .candidate-item):hover { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-row, .music-card, .clip-library-row).is-pointer-lit { background-image: none; box-shadow: var(--shadow-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-row.is-selected, .music-card.is-selected, .clip-library-row.is-editing) { background: var(--primary-light); border-color: var(--primary-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-row, .music-card, .clip-library-row, .clip-item).is-playing { background: var(--primary-light); border-color: var(--primary); box-shadow: inset 3px 0 var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .music-actions { opacity: 1; }
+body:is([data-theme="cream"], [data-theme="night"]) .clip-library { background: transparent; box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-name, .card-name, .clip-library-name) { font-weight: 600; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-icon, .clip-library-icon, .player-icon, .drop-icon, .empty-icon) { color: var(--primary-strong); background: var(--primary-light); border: 1px solid var(--primary-soft); box-shadow: none; text-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .music-icon { font-size: 21px; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.music-icon::after, .card-icon::after, .player-icon::after) { display: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .card-icon { color: var(--cover-ink); background: radial-gradient(ellipse at 68% 34%, var(--cover-b), transparent 65%), var(--cover-a); border: 0; border-radius: var(--r-md); box-shadow: none; font-size: 40px; text-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .music-card:nth-child(3n+2) .card-icon { background: radial-gradient(ellipse at 22% 76%, var(--cover-c), transparent 65%), var(--cover-b); }
+body:is([data-theme="cream"], [data-theme="night"]) .music-card:nth-child(3n) .card-icon { background: radial-gradient(ellipse at 72% 32%, var(--cover-a), transparent 65%), var(--cover-c); }
+body:is([data-theme="cream"], [data-theme="night"]) .card-icon::before { color: var(--cover-ink); }
+body:is([data-theme="cream"], [data-theme="night"]) .empty-state { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.empty-state::before, .empty-state::after) { display: none; }
+
+/* Tags, album navigation, and recent-view selection share the accent family. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(.tag, .active-filter-tag, .editing-tag, .suggestion-tag, .tag-result-tab, .tag-page-item, .tag-drop-zone) { color: var(--tag-text); background: var(--tag); border-color: transparent; border-radius: var(--r-sm); font-weight: 500; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.editing-tag button, .tag-page-count) { color: inherit; background: transparent; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.suggestion-tag:hover, .tag-page-item:hover, .tag-result-tab.active, .active-filter-tag, .tag-drop-zone.dragover) { color: var(--primary-strong); background: var(--primary-light); border-color: var(--primary-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) .tag-result-tab.active span { color: inherit; }
+body:is([data-theme="cream"], [data-theme="night"]) .tag-drag-ghost { color: var(--primary-strong); background: var(--panel); }
+body:is([data-theme="cream"], [data-theme="night"]) .filter-panel { background: var(--surface); border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) .bulk-toolbar { background: var(--primary-light); border-color: var(--primary-soft); }
+body:is([data-theme="cream"], [data-theme="night"]) .catalog-list { border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) .catalog-filter { background: var(--surface); border-color: var(--border-strong); border-radius: var(--r-md); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.catalog-item, .catalog-item-icon, .import-album-item) { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.catalog-item, .import-album-item):hover { color: var(--text); background: var(--hover); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.catalog-item.active, .import-album-item.active, .recent-mode-btn.active, .detail-tab.active) { color: var(--primary-strong); background: var(--primary-light); border-color: var(--primary-soft); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .quick-tag-editor select { background-color: var(--surface); }
+body:is([data-theme="cream"], [data-theme="night"]) .quick-tag-editor button { color: var(--on-primary); background: var(--primary); }
+
+/* Detail, import, clipping, and settings remain part of the same room. */
+body:is([data-theme="cream"], [data-theme="night"]) :is(.detail-panel, .music-clips-panel, .clip-editor-panel, .modal-box, .theme-menu, .import-review) { color: var(--text); background: var(--panel); border-color: var(--border); box-shadow: var(--shadow-lg); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.detail-panel, .music-clips-panel) { border-radius: 0; box-shadow: -8px 0 24px var(--ring); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.modal-box, .clip-editor-panel) { border-radius: var(--r-xl); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.detail-header, .clip-editor-header, .clip-editor-footer, .modal-header, .modal-footer, .import-album-list) { color: var(--text); background: var(--surface); border-color: var(--border); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.detail-specs, .import-meta-cards, .import-meta-card.is-readonly, .clip-editor-preview, .timeline-editor, .detail-tab) { color: var(--text); background: var(--surface); border-color: var(--border); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .detail-edit .album-source-field select { background-color: var(--surface-strong); }
+body:is([data-theme="cream"], [data-theme="night"]) .detail-edit .album-source-field select:hover { background-color: var(--hover); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.modal, .clip-editor-overlay) { background: var(--scrim); backdrop-filter: blur(5px); }
+body:is([data-theme="cream"], [data-theme="night"]) .drop-zone { background: var(--surface); border-color: var(--border-strong); border-radius: var(--r-lg); }
+body:is([data-theme="cream"], [data-theme="night"]) .drop-zone.dragover { background: var(--primary-light); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .album-source-control { background: var(--surface); border-radius: var(--r-md); }
+body:is([data-theme="cream"], [data-theme="night"]) .album-source-control label:has(input:checked) { color: var(--primary-strong); background: var(--primary-light); border-radius: var(--r-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) .album-source-control input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--primary-light) !important; }
+body:is([data-theme="cream"], [data-theme="night"]) .settings-action { color: var(--text); }
+body:is([data-theme="cream"], [data-theme="night"]) .settings-action:hover { background: var(--hover); }
+body:is([data-theme="cream"], [data-theme="night"]) .timeline-track { background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 12px), var(--surface); border-radius: var(--r-sm); }
+body:is([data-theme="cream"], [data-theme="night"]) .timeline-selection { background: var(--ring); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.timeline-handle, .timeline-playhead) { background: var(--primary); box-shadow: none; }
+
+/* Player and transient feedback use theme-aware foreground/background pairs. */
+body:is([data-theme="cream"], [data-theme="night"]) .player-bar { color: var(--text); background: var(--player-surface); border-top: 1px solid var(--border); box-shadow: var(--shadow-md); }
+body:is([data-theme="cream"], [data-theme="night"]) .player-title { color: var(--text); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.player-meta, .player-time) { color: var(--subtext); }
+body:is([data-theme="cream"], [data-theme="night"]) .player-btn { color: var(--text); background: var(--surface); border-color: var(--border-strong); box-shadow: none; }
+body:is([data-theme="cream"], [data-theme="night"]) .player-btn:hover { color: var(--primary-strong); background: var(--hover); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .player-play { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }
+body:is([data-theme="cream"], [data-theme="night"]) .player-play:hover { color: var(--on-primary); background: var(--primary-hover); border-color: var(--primary-hover); }
+body:is([data-theme="cream"], [data-theme="night"]) .badge { color: var(--primary-strong); background: var(--primary-light); }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.toast, .icon-action[title]::after) { color: var(--tooltip-text); background: var(--tooltip); border-color: var(--border-strong); border-radius: var(--r-sm); box-shadow: var(--shadow-md); }
+
+/* Carry the same empty painted plate through the workspace, without adding
+   scene objects behind the library. Opaque reading surfaces keep text clear. */
+body:is([data-theme="cream"], [data-theme="night"]):not(.view-home) .app {
+    background: var(--home-paper) var(--home-backdrop) center / cover no-repeat;
+}
+body:is([data-theme="cream"], [data-theme="night"]):not(.view-home) :is(.main, .content, .topbar, .sidebar, .toolbar, .database-path) { background: transparent; }
+
+/* Keep the open edges from the previous pass; use the painting for color. */
+body[data-theme="night"]:not(.view-home) :is(.sidebar, .toolbar, .page-header) { border-color: transparent; }
+body[data-theme="night"]:not(.view-home) .topbar::after { background: transparent; }
+body[data-theme="night"]:not(.view-home) .music-list { border-color: transparent; }
+body[data-theme="night"]:not(.view-home) .music-actions .icon-action { border-color: transparent; }
+body[data-theme="night"]:not(.view-home) :is(.detail-panel, .music-clips-panel) { box-shadow: none; }
+
+@media (max-width: 700px) {
+    body:is([data-theme="cream"], [data-theme="night"]) .clip-editor-panel { border-radius: 0; }
+}
+
+/* Hold the old image fully opaque while the new one fades over it: fading
+   both snapshots at once can expose the page underneath as a white flash. */
+html.theme-crossfade::view-transition-group(root) { animation: none; }
+html.theme-crossfade::view-transition-image-pair(root) { isolation: isolate; }
+html.theme-crossfade::view-transition-old(root) { animation: none; opacity: 1; mix-blend-mode: normal; }
+html.theme-crossfade::view-transition-new(root) { animation: theme-appear 520ms cubic-bezier(.4, 0, .2, 1) both; mix-blend-mode: normal; }
+@keyframes theme-appear { from { opacity: 0; } to { opacity: 1; } }
+
+/* Older WebViews interpolate colors, while a non-interactive painting layer
+   bridges the two scene images. These overrides live only during the switch. */
+html.theme-color-transition body,
+html.theme-color-transition body *,
+html.theme-color-transition body *::before,
+html.theme-color-transition body *::after {
+    transition-property: color, background-color, border-color, box-shadow, fill, stroke !important;
+    transition-duration: 520ms !important;
+    transition-timing-function: cubic-bezier(.4, 0, .2, 1) !important;
+}
+.scene-theme-snapshot { position: absolute; inset: 0; z-index: 1; overflow: hidden; pointer-events: none; }
+.workspace-theme-snapshot { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.scene-theme-snapshot.is-leaving, .workspace-theme-snapshot.is-leaving { animation: theme-disappear 520ms cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes theme-disappear { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+    html.theme-crossfade::view-transition-new(root) { animation: none; }
+    html.theme-color-transition body,
+    html.theme-color-transition body *,
+    html.theme-color-transition body *::before,
+    html.theme-color-transition body *::after { transition-duration: 0s !important; }
+    .scene-theme-snapshot.is-leaving, .workspace-theme-snapshot.is-leaving { animation: none; opacity: 0; }
+}

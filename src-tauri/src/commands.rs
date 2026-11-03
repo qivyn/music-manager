@@ -3,7 +3,7 @@ use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -445,8 +445,20 @@ pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: Str
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    if end <= start {
-        return Err("选区为空，无法导出".into());
+    validate_clip_range(start, end)?;
+
+    let source = Path::new(&source_path).canonicalize().map_err(|e| format!("打开源文件失败: {e}"))?;
+    let destination = Path::new(&dest_path);
+    if let Ok(resolved) = destination.canonicalize() {
+        let mut same_file = resolved == source;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let a = fs::metadata(&source).map_err(|e| e.to_string())?;
+            let b = fs::metadata(&resolved).map_err(|e| e.to_string())?;
+            same_file |= a.dev() == b.dev() && a.ino() == b.ino();
+        }
+        if same_file { return Err("导出位置不能是原始音频文件，请选择其他文件名".into()); }
     }
 
     let file = std::fs::File::open(&source_path).map_err(|e| format!("打开源文件失败: {e}"))?;
@@ -476,7 +488,11 @@ pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: Str
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(&dest_path, spec)
+    // Finish in the destination directory before atomically publishing the result.
+    // Failure must preserve both the source and any existing destination.
+    let parent = destination.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let output = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("创建临时 WAV 失败: {e}"))?;
+    let mut writer = hound::WavWriter::new(output.reopen().map_err(|e| e.to_string())?, spec)
         .map_err(|e| format!("创建 WAV 失败: {e}"))?;
 
     let mut frames_written: u64 = 0;
@@ -484,17 +500,20 @@ pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: Str
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
     let mut buf_spec: Option<symphonia::core::audio::SignalSpec> = None;
 
-    loop {
+    // Stop before fetching another packet once the selected interval is complete:
+    // damage after the selection must not invalidate an otherwise complete export.
+    while cursor < end_frame {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(_) => break,
+            Err(symphonia::core::errors::Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("读取音频失败: {e}")),
         };
         if packet.track_id() != track_id {
             continue;
         }
         let decoded = match decoder.decode(&packet) {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => return Err(format!("解码音频失败: {e}")),
         };
         let spec = *decoded.spec();
         let n_frames = decoded.frames() as u64;
@@ -535,6 +554,7 @@ pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: Str
     if frames_written == 0 {
         return Err("选区内没有可导出的音频".into());
     }
+    output.persist(destination).map_err(|e| format!("保存 WAV 失败: {e}"))?;
     Ok(dest_path)
 }
 
@@ -710,9 +730,17 @@ pub fn update_music(
     music: MusicInput,
 ) -> Result<(), String> {
     let mut conn = lock_db!(state);
+    update_music_in(&mut conn, &music)
+}
+
+fn update_music_in(conn: &mut rusqlite::Connection, music: &MusicInput) -> Result<(), String> {
     let tx = conn.transaction().map_err(|e| format!("开启事务失败: {e}"))?;
 
-    let bookmark = create_file_bookmark(&music.path)?;
+    let (old_path, old_bookmark): (String, Option<Vec<u8>>) = tx.query_row(
+        "SELECT path, file_bookmark FROM music WHERE id=?1", params![music.id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(|e| format!("读取原音乐失败: {e}"))?;
+    let bookmark = if old_path == music.path { old_bookmark } else { Some(create_file_bookmark(&music.path)?) };
     tx.execute(
         "UPDATE music SET name=?1, file_name=?2, path=?3, file_bookmark=?4, album=?5, album_source=?6, artist=?7, genre=?8, year=?9, channels=?10, sample_rate=?11, bitrate=?12, duration=?13, file_size=?14, mime_type=?15, cover_art=?16, updated_at=?17 WHERE id=?18",
         params![
@@ -1137,14 +1165,20 @@ pub struct TagRecord {
 #[tauri::command]
 pub fn list_tags(state: tauri::State<'_, AppState>) -> Result<Vec<TagRecord>, String> {
     let conn = lock_db!(state);
+    list_tags_in(&conn)
+}
+
+fn list_tags_in(conn: &rusqlite::Connection) -> Result<Vec<TagRecord>, String> {
     let mut stmt = conn.prepare(
-        "WITH RECURSIVE tree(id, path) AS (SELECT t.id, t.name FROM tags t WHERE t.parent_id IS NULL UNION ALL SELECT t.id, tree.path || ' / ' || t.name FROM tags t JOIN tree ON t.parent_id=tree.id) \
-         SELECT t.id, t.name, t.category_id, CASE WHEN c.name='未分类' THEN '' ELSE c.name END, t.parent_id, tree.path, COUNT(DISTINCT mt.music_id) + COUNT(DISTINCT ct.clip_id) + COUNT(DISTINCT at.album) AS music_count \
-         FROM tags t LEFT JOIN music_tags mt ON mt.tag_id = t.id \
-         LEFT JOIN clip_tags ct ON ct.tag_id = t.id \
-         LEFT JOIN album_tags at ON at.tag_id = t.id \
+        "WITH RECURSIVE tree(id, path) AS (SELECT t.id, t.name FROM tags t WHERE t.parent_id IS NULL UNION ALL SELECT t.id, tree.path || ' / ' || t.name FROM tags t JOIN tree ON t.parent_id=tree.id), \
+         music_counts AS (SELECT tag_id, COUNT(DISTINCT music_id) AS n FROM music_tags GROUP BY tag_id), \
+         clip_counts AS (SELECT tag_id, COUNT(DISTINCT clip_id) AS n FROM clip_tags GROUP BY tag_id), \
+         album_counts AS (SELECT tag_id, COUNT(DISTINCT album) AS n FROM album_tags GROUP BY tag_id) \
+         SELECT t.id, t.name, t.category_id, CASE WHEN c.name='未分类' THEN '' ELSE c.name END, t.parent_id, tree.path, COALESCE(mt.n,0) + COALESCE(ct.n,0) + COALESCE(at.n,0) AS music_count \
+         FROM tags t LEFT JOIN music_counts mt ON mt.tag_id = t.id \
+         LEFT JOIN clip_counts ct ON ct.tag_id = t.id \
+         LEFT JOIN album_counts at ON at.tag_id = t.id \
          JOIN tag_categories c ON c.id=t.category_id JOIN tree ON tree.id=t.id \
-         GROUP BY t.id, t.name, t.category_id, c.name, t.parent_id, tree.path \
          ORDER BY c.name COLLATE NOCASE, tree.path COLLATE NOCASE"
     )
         .map_err(|e| format!("准备 Tag 查询失败: {e}"))?;
@@ -1380,13 +1414,20 @@ pub fn set_album_tags(
     tag_ids: Vec<i64>,
     new_tags: Vec<String>,
 ) -> Result<Vec<i64>, String> {
+    let mut conn = lock_db!(state);
+    set_album_tags_in(&mut conn, &album, &tag_ids, &new_tags)
+}
+
+fn set_album_tags_in(conn: &mut rusqlite::Connection, album: &str, tag_ids: &[i64], new_tags: &[String]) -> Result<Vec<i64>, String> {
     let album = album.trim().to_string();
     if album.is_empty() {
         return Err("专辑名不能为空".into());
     }
-    let conn = lock_db!(state);
-    sync_tag_ids(&conn, &album, &tag_ids, &new_tags, "album_tags", "album")?;
-    load_tag_ids(&conn, &album, "album_tags", "album")
+    let tx = conn.transaction().map_err(|e| format!("开启专辑 Tag 事务失败: {e}"))?;
+    sync_tag_ids(&tx, &album, tag_ids, new_tags, "album_tags", "album")?;
+    let ids = load_tag_ids(&tx, &album, "album_tags", "album")?;
+    tx.commit().map_err(|e| format!("保存专辑 Tag 失败: {e}"))?;
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -1397,17 +1438,24 @@ pub fn delete_album_tags(state: tauri::State<'_, AppState>, album: String) -> Re
     Ok(())
 }
 
-/// 专辑随 Finder 文件夹改名后，专辑 Tag 跟到新名字：先 OR IGNORE 合并
-/// （新名字下已有同 Tag 的冲突行保持不动），再删掉仍挂在旧名字下的剩余行。
-fn apply_album_renames(conn: &rusqlite::Connection, renames: &HashMap<String, String>) -> Result<(), String> {
-    for (old, new) in renames {
-        if old == new {
-            continue;
-        }
-        conn.execute("UPDATE OR IGNORE album_tags SET album=?1 WHERE album=?2", params![new, old])
-            .map_err(|e| format!("迁移专辑 Tag 失败: {e}"))?;
+/// 整张专辑改名时按原始快照迁移 Tag，并保留目标专辑已有的关联。
+fn apply_album_renames(conn: &rusqlite::Connection, renames: &HashMap<String, HashSet<String>>) -> Result<(), String> {
+    // Snapshot every source before any mutation: chains, swaps and splits must
+    // not merge one source's tags into another source's subsequent move.
+    let snapshots = renames.iter().map(|(old, destinations)| {
+        Ok((old, destinations, load_tag_ids(conn, old, "album_tags", "album")?))
+    }).collect::<Result<Vec<_>, String>>()?;
+    for (old, _, _) in &snapshots {
         conn.execute("DELETE FROM album_tags WHERE album=?1", params![old])
             .map_err(|e| format!("清理专辑 Tag 失败: {e}"))?;
+    }
+    for (_, destinations, ids) in snapshots {
+        for album in destinations {
+            for id in &ids {
+                conn.execute("INSERT OR IGNORE INTO album_tags(album, tag_id) VALUES (?1, ?2)", params![album, id])
+                    .map_err(|e| format!("迁移专辑 Tag 失败: {e}"))?;
+            }
+        }
     }
     Ok(())
 }
@@ -1476,6 +1524,43 @@ pub struct LocationSyncResult {
     updated_albums: usize,
 }
 
+struct LocationUpdate {
+    path: String,
+    file_name: String,
+    bookmark: Vec<u8>,
+    album: String,
+    source: String,
+    id: String,
+}
+
+fn apply_location_updates(conn: &mut rusqlite::Connection, updates: &[LocationUpdate]) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| format!("开启位置同步事务失败: {e}"))?;
+    let counts = {
+        let mut stmt = tx.prepare("SELECT album, COUNT(*) FROM music GROUP BY album").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, usize>(1)?)))
+            .map_err(|e| e.to_string())?.collect::<Result<HashMap<_, _>, _>>().map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut changed = HashMap::<String, usize>::new();
+    let mut renames = HashMap::<String, HashSet<String>>::new();
+    for update in updates {
+        let old: String = tx.query_row("SELECT album FROM music WHERE id=?1", params![update.id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if old != update.album {
+            *changed.entry(old.clone()).or_default() += 1;
+            renames.entry(old).or_default().insert(update.album.clone());
+        }
+        tx.execute(
+            "UPDATE music SET path=?1, file_name=?2, file_bookmark=?3, album=?4, album_source=?5, updated_at=?6 WHERE id=?7",
+            params![update.path, update.file_name, update.bookmark, update.album, update.source, now_ms(), update.id],
+        ).map_err(|e| format!("写入同步位置失败: {e}"))?;
+    }
+    // A partial move must leave the original album's tags with its remaining members.
+    renames.retain(|old, _| changed.get(old) == counts.get(old));
+    apply_album_renames(&tx, &renames)?;
+    tx.commit().map_err(|e| format!("提交位置同步失败: {e}"))
+}
+
 /// Resolve persisted macOS file bookmarks at launch. A Finder move or rename
 /// changes the resolved URL, so the database can be repaired without watching
 /// every directory continuously.
@@ -1496,7 +1581,6 @@ pub fn sync_library_locations(state: tauri::State<'_, AppState>) -> Result<Locat
 
     let mut result = LocationSyncResult { updated_paths: 0, updated_albums: 0 };
     let mut updates = Vec::new();
-    let mut album_renames: HashMap<String, String> = HashMap::new();
     for (id, old_path, old_album, old_source, bookmark) in entries {
         let mut source = old_source.clone();
         let resolved = match bookmark.as_deref().filter(|data| !data.is_empty()) {
@@ -1526,24 +1610,12 @@ pub fn sync_library_locations(state: tauri::State<'_, AppState>) -> Result<Locat
         if path_changed || album_changed || source_changed || bookmark_changed {
             result.updated_paths += usize::from(path_changed);
             result.updated_albums += usize::from(album_changed);
-            if album_changed {
-                album_renames.insert(old_album.clone(), album.clone());
-            }
-            updates.push((path, file_name, refreshed_bookmark, album, source, id));
+            updates.push(LocationUpdate { path, file_name, bookmark: refreshed_bookmark, album, source, id });
         }
     }
     if !updates.is_empty() {
         let mut conn = lock_db!(state);
-        let tx = conn.transaction().map_err(|e| format!("开启位置同步事务失败: {e}"))?;
-        for (path, file_name, bookmark, album, source, id) in updates {
-            tx.execute(
-                "UPDATE music SET path=?1, file_name=?2, file_bookmark=?3, album=?4, album_source=?5, updated_at=?6 WHERE id=?7",
-                params![path, file_name, bookmark, album, source, now_ms(), id],
-            ).map_err(|e| format!("写入同步位置失败: {e}"))?;
-        }
-        // 专辑 Tag 以名字为键，文件夹改名要跟过去，否则 Tag 悄悄丢在旧名字下。
-        apply_album_renames(&tx, &album_renames)?;
-        tx.commit().map_err(|e| format!("提交位置同步失败: {e}"))?;
+        apply_location_updates(&mut conn, &updates)?;
     }
     Ok(result)
 }
@@ -1580,6 +1652,10 @@ pub fn get_audio_base_url() -> Option<String> {
     // 仅 Plan-B（本地 HTTP 音频流服务）启用时返回。
     None
 }
+
+#[cfg(test)]
+#[path = "commands_regression_tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1730,7 +1806,7 @@ mod tests {
         conn.execute("INSERT INTO album_tags (album, tag_id) VALUES ('旧专辑', ?1)", params![tag_b]).unwrap();
         conn.execute("INSERT INTO album_tags (album, tag_id) VALUES ('新专辑', ?1)", params![tag_a]).unwrap();
 
-        let renames = HashMap::from([("旧专辑".to_string(), "新专辑".to_string())]);
+        let renames = HashMap::from([("旧专辑".to_string(), HashSet::from(["新专辑".to_string()]))]);
         apply_album_renames(&conn, &renames).unwrap();
 
         let remaining_old: i64 = conn
