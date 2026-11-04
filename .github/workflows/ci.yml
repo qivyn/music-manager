@@ -1,7 +1,7 @@
 name: CI
 
 # PR 与 main 共用一条流水线：测试全部通过后，main 上版本号比已发布版本新时才构建并发布。
-# PR 只测试和校验发布配置，不构建分发包。签名密钥只在 release 任务里使用。
+# PR 验证真实双架构安装包；仅已发布版本的纯文档改动跳过打包。正式密钥只在 release 使用。
 on:
   pull_request:
     branches: [main]
@@ -17,7 +17,7 @@ env:
   TAURI_CLI_VERSION: '2.11.4'
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   # 只取消旧的 PR 运行；main 上正在进行的发布不被打断
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -106,10 +106,12 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       newer: ${{ steps.plan.outputs.newer }}
+      build_required: ${{ steps.policy.outputs.build_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       # 校验三处版本号一致，并与已发布的 Release 和已有标签比较
       - name: Compare with published releases
@@ -132,10 +134,17 @@ jobs:
             fi
           done
 
+      - name: Decide whether packaging is required
+        id: policy
+        env:
+          CI_NEWER: ${{ steps.plan.outputs.newer }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/ci-policy.cjs
+
   build:
     name: Build DMG (${{ matrix.arch }})
     needs: [frontend, backend, plan]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.newer == 'true') || github.event_name == 'workflow_dispatch'
+    if: needs.plan.outputs.build_required == 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -166,28 +175,16 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
+          shared-key: macos-build
           key: ${{ matrix.target }}
+          cache-on-failure: true
 
       - name: Test macOS installer and recovery
         run: |
           mkdir -p test-results
           bash scripts/test-macos-installer.sh 2>&1 | tee test-results/installer.log
 
-      # 独立缓存 CLI；不随应用版本/依赖变化失效，供同架构的构建与发布任务复用。
-      - name: Cache Tauri CLI
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/music-manager-tauri-cli
-          key: tauri-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.TAURI_CLI_VERSION }}
-
-      - name: Set up Tauri CLI
-        run: |
-          cli_root="$RUNNER_TEMP/music-manager-tauri-cli"
-          if [[ "$("$cli_root/bin/cargo-tauri" --version 2>/dev/null || true)" != "tauri-cli $TAURI_CLI_VERSION" ]]; then
-            cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked --root "$cli_root" --force
-          fi
-          test "$("$cli_root/bin/cargo-tauri" --version)" = "tauri-cli $TAURI_CLI_VERSION"
-          echo "$cli_root/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-tauri-cli
 
       - name: Run backend regression tests on this architecture
         run: |
@@ -220,15 +217,77 @@ jobs:
           path: test-results/
           retention-days: 30
 
+  preview:
+    name: Release rehearsal (temporary key)
+    needs: [plan, build]
+    if: needs.plan.outputs.build_required == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+          shared-key: macos-build
+          key: aarch64-apple-darwin
+          cache-on-failure: true
+      - uses: ./.github/actions/setup-tauri-cli
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dmg-*-${{ github.sha }}
+          path: dist
+          merge-multiple: true
+      - name: Rehearse signing, verification and update feed
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ runner.temp }}/rehearsal.key
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          cargo tauri signer generate --ci --password '' --write-keys "$TAURI_SIGNING_PRIVATE_KEY_PATH" > /dev/null
+          python3 scripts/prepare-release.py --version "$VERSION" --directory dist \
+            --public-key "$TAURI_SIGNING_PRIVATE_KEY_PATH.pub" --notes docs/update-notes.txt --target aarch64-apple-darwin
+          # Re-running must preserve the exact candidate bytes, including signatures and timestamps.
+          python3 -c 'import hashlib,pathlib; print([(p.name,hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(pathlib.Path("dist").iterdir())])' > "$RUNNER_TEMP/candidate-before"
+          python3 scripts/prepare-release.py --version "$VERSION" --directory dist \
+            --public-key "$TAURI_SIGNING_PRIVATE_KEY_PATH.pub" --notes docs/update-notes.txt --target aarch64-apple-darwin
+          python3 -c 'import hashlib,pathlib; print([(p.name,hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(pathlib.Path("dist").iterdir())])' > "$RUNNER_TEMP/candidate-after"
+          cmp "$RUNNER_TEMP/candidate-before" "$RUNNER_TEMP/candidate-after"
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/rehearsal.key" "$RUNNER_TEMP/rehearsal.key.pub"
+
+  ready:
+    name: CI Ready
+    if: always()
+    needs: [frontend, backend, plan, build, preview]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require all expected results
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-policy.cjs --check
+
   release:
     name: Release
-    needs: [plan, build]
+    needs: [plan, build, ready]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.newer == 'true'
     # 校验更新签名的 verify-update 只能在 macOS 上编译
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       # gh release create 用这个 token 创建标签和 Release
@@ -265,30 +324,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
-          key: release
+          shared-key: macos-build
+          key: aarch64-apple-darwin
+          cache-on-failure: true
 
-      - name: Cache Tauri CLI
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/music-manager-tauri-cli
-          key: tauri-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.TAURI_CLI_VERSION }}
-
-      - name: Set up Tauri CLI
-        run: |
-          cli_root="$RUNNER_TEMP/music-manager-tauri-cli"
-          if [[ "$("$cli_root/bin/cargo-tauri" --version 2>/dev/null || true)" != "tauri-cli $TAURI_CLI_VERSION" ]]; then
-            cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked --root "$cli_root" --force
-          fi
-          test "$("$cli_root/bin/cargo-tauri" --version)" = "tauri-cli $TAURI_CLI_VERSION"
-          echo "$cli_root/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/setup-tauri-cli
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dmg-*-${{ github.sha }}
+          path: dist
+          merge-multiple: true
+
+      - name: Find saved signed candidate from this run
+        id: saved
+        run: python3 scripts/prepare-release.py --find-saved
+
+      - name: Restore original signed candidate for retry
+        if: steps.saved.outputs.candidate_id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.saved.outputs.candidate_id }}
           path: dist
           merge-multiple: true
 
@@ -297,27 +358,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
-          expected="$(printf 'music-manager_%s_aarch64.dmg\nmusic-manager_%s_aarch64.dmg.metadata.json\nmusic-manager_%s_x64.dmg\nmusic-manager_%s_x64.dmg.metadata.json\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION")"
-          if [[ "$(ls dist)" != "$expected" ]]; then
-            echo "构建产物与 v$VERSION 不符：" >&2
-            ls -l dist >&2
-            exit 1
-          fi
-          for arch in aarch64 x64; do
-            asset="dist/music-manager_${VERSION}_${arch}.dmg"
-            cargo tauri signer sign "$asset"
-            cargo tauri signer sign "$asset.metadata.json"
-            cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify-update -- "$asset" "$asset.sig" --trusted-key src-tauri/updater-trusted-public-key.txt
-            cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify-update -- "$asset.metadata.json" "$asset.metadata.json.sig" --trusted-key src-tauri/updater-trusted-public-key.txt
-          done
+          python3 scripts/prepare-release.py --version "$VERSION" --directory dist \
+            --public-key src-tauri/updater-trusted-public-key.txt --notes docs/update-notes.txt --target aarch64-apple-darwin
 
-      - name: Create signed-package update feed
-        run: python3 scripts/create-update-manifest.py --version "$VERSION" --directory dist --notes docs/update-notes.txt
+      - name: Preserve signed candidate before publishing
+        if: steps.saved.outputs.candidate_id == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
 
       # gh 会把 --notes-file 的内容放在自动生成的 release notes 之前
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp scripts/install-macos.sh dist/install-macos.sh
           python3 scripts/publish-release.py --version "$VERSION" --directory dist --notes docs/release-notes.md

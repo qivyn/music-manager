@@ -27,7 +27,7 @@
 | `docs/update-notes.txt`、`docs/release-notes.md` | 应用内更新说明与 GitHub Release 正文（`{{version}}` 会被替换） |
 | `scripts/macos-installer/` | Swift 图形安装器及其测试 |
 | `scripts/desktop-acceptance/` | 隔离验收用的独立 App / DMG 构建脚本 |
-| `.github/workflows/ci.yml` | PR 只测试；`main` 测试通过且版本号新时双架构构建并自动发布；手动运行只测试与构建 |
+| `.github/workflows/ci.yml` | PR 按完整差异验证双架构 App/DMG 与发布预演，`CI Ready` 汇总；main 新版本自动发布；手动不发布 |
 
 ## 开发流程
 
@@ -91,7 +91,7 @@ python3 scripts/test-release-plan.py
   - **改动**：做了什么、为什么、影响哪些模块，数据库 schema / 用户数据是否受影响。
   - **实际验证结果**：执行的命令和真实输出摘要（通过数 / 失败数）、E2E 截图或真实窗口的验证情况、构建是否成功。
   - **未验证 / 风险**：没覆盖到的场景和原因。
-- PR 会触发 `ci.yml`：前端、更新清单、发版判断、后端和安装器测试；无论是否改版本号，都不构建分发 App/DMG。双架构构建只在 `main` 新版本或手动运行时执行，不要逐个 PR 手动修改此规则。CI 失败时先修复，不把失败的 PR 交给用户合并；CI 只在 Apple Silicon 上跑常规后端测试，不替代本地的 E2E 和构建验证。
+- PR 会触发 `ci.yml`：全部回归；版本未发布或有非文档改动时，还需双架构 release 测试、真实 App/DMG 构建和临时密钥发布预演。只有版本已发布且完整差异仅为 `README.md`、`AGENTS.md`、`docs/` 时跳过打包，未知路径默认构建。固定检查 `CI Ready` 必须通过；CI 失败先修复，不让用户通过合并验证修复。新提交和 main 更新后重新验证，不沿用旧结果。CI 构建不替代本地 E2E；不要逐个 PR 修改规则。main 的必需检查和严格更新设置由用户在 GitHub 配置。
 - **不自动合并**：不执行 `gh pr merge`、不开启 auto-merge，由用户手动合并。
 - **发版由合并触发，不手动打标签**：合并到 `main` 后 `ci.yml` 自动运行，测试通过且版本号比已发布版本新时，构建两个架构、签名并创建 tag 与 Release；版本号没变则只测试、不发布。`workflow_dispatch` 只测试并构建 DMG，不发布。
 - 只有用户要求发版时才改版本号；发版同时要写 `docs/update-notes.txt` 和 `docs/release-notes.md`，CI 会检查两份说明都包含 `v<版本号>`。

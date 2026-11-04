@@ -42,13 +42,27 @@ def create_manifest(version, directory, notes):
     }
 
 
+def write_manifest(version, directory, notes):
+    manifest = create_manifest(version, directory, notes)
+    output = directory / 'latest.json'
+    if output.exists():
+        existing = json.loads(output.read_text())
+        published_at = existing.get('pub_date')
+        if not isinstance(published_at, str) or datetime.datetime.fromisoformat(published_at.replace('Z', '+00:00')).tzinfo is None:
+            raise ValueError('Saved update feed has no valid publication time')
+        manifest['pub_date'] = published_at
+        if existing != manifest:
+            raise ValueError('Saved update feed does not match verified packages')
+        print(f'Reused {output}')
+    else:
+        output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+        print(f'Created {output}')
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--notes", type=Path, required=True)
     args = parser.parse_args()
-    manifest = create_manifest(args.version, args.directory, args.notes.read_text())
-    output = args.directory / "latest.json"
-    output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    print(f"Created {output}")
+    write_manifest(args.version, args.directory, args.notes.read_text())

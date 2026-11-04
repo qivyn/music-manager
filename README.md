@@ -138,9 +138,15 @@ cd src-tauri && cargo tauri dev
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
-每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。PR 无论是否修改版本号，都只测试和校验发布配置，不构建 App/DMG。合并到 `main` 后，测试全部通过且版本号比已发布版本新时，才在 Apple Silicon 和 Intel 上各构建一次 App/DMG，再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的 `main` 提交只测试、不发布；手动运行仍会测试并构建两个架构，但不发布。打包问题会在合并后阻止发布，需要合并前确认打包时可手动运行。
+每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：Ubuntu 上做前端语法、Node 回归、更新清单和发布脚本测试，macOS 上做 Rust 与安装器回归。PR 的版本未发布，或包含任何代码、前端资源、依赖、安装器、构建脚本、CI 或未知路径变更时，自动在 Apple Silicon 和 Intel 原生构建机上各运行 release 测试、构建 App/DMG 并校验。只有版本已发布且完整差异仅涉及 `README.md`、`AGENTS.md`、`docs/` 的 PR 可以跳过打包；空差异默认构建，差异读取失败则失败，不猜测为纯文档。重命名按删除和新增检查，避免把代码移入文档目录后漏掉验证。
 
-Tauri CLI 使用按系统、架构和 CLI 版本区分的独立缓存，构建与发布任务共用；命中后核对版本直接使用，首次运行或缓存失效时才安装。`node --test scripts/test-ci-workflow.cjs` 直接验证工作流的构建/发布条件和 CLI 缓存命中、缺失及旧版本处理，不需要修改每个 PR 的工作流。
+两套安装包构建后，`Release rehearsal (temporary key)` 使用临时密钥执行与正式发布相同的签名、验签及清单生成，并验证重复执行后候选文件字节不变。临时密钥仅保存在 runner 临时目录并清理，PR 不使用正式发布密钥、不创建 Release。固定检查 **`CI Ready`** 无论上游成功、失败或跳过都会执行：所有必需测试及计划要求的打包、预演必须明确成功，只有明确允许的跳过才能通过。手动运行仍测试、构建和预演，不发布，也不代替 PR 的必需检查。
+
+仓库管理员需在 Settings → Branches 编辑已有 `main` 规则：开启 **Require status checks to pass before merging**，添加 GitHub Actions 的 **CI Ready**，开启 **Require branches to be up to date before merging**，保持 **Do not allow bypassing the above settings**。检查名称在首次运行后可搜索。此仓库设置由用户配置，修改 YAML 不会自动设置合并保护；用户手动合并 PR。
+
+合并到 `main` 后，测试与 `CI Ready` 通过且版本号比已发布版本新时，重新构建正式安装包、签名、核对草稿远端资产后发布。没有新版本时只测试。正式发布前保存本次运行、同一提交的完整签名候选；失败重试恢复原候选，重新验签并核对清单，保持签名和时间戳原字节，避免已上传的草稿资产因重新生成而摘要不符。未找到保存候选时重新准备，但不会覆盖不匹配的草稿或已发布资产。手动运行与 main 发布使用不同并发组，避免相互占用同一等待位置。
+
+Tauri CLI 按系统、架构和 CLI 版本独立缓存；安装并验证后立即保存，后续 DMG 失败也不丢失已准备的工具。构建依赖缓存允许失败后保存，构建、预演与发布复用同架构依赖。`node --test scripts/test-ci-workflow.cjs` 覆盖实际工作流条件、完整 Git 差异、CLI 缓存命中/缺失/旧版本和合并结果检查；`python3 scripts/test-publish-release.py` 覆盖部分上传恢复、已发布资产保护和签名候选复用。
 
 波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
 
