@@ -1,0 +1,28 @@
+name: Set up cached Tauri CLI
+description: Restore a versioned CLI and save it immediately after validation.
+runs:
+  using: composite
+  steps:
+    - name: Restore Tauri CLI
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/music-manager-tauri-cli
+        key: tauri-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.TAURI_CLI_VERSION }}
+
+    - name: Set up Tauri CLI
+      shell: bash
+      run: |
+        cli_root="$RUNNER_TEMP/music-manager-tauri-cli"
+        if [[ "$("$cli_root/bin/cargo-tauri" --version 2>/dev/null || true)" != "tauri-cli $TAURI_CLI_VERSION" ]]; then
+          cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked --root "$cli_root" --force
+        fi
+        test "$("$cli_root/bin/cargo-tauri" --version)" = "tauri-cli $TAURI_CLI_VERSION"
+        echo "$cli_root/bin" >> "$GITHUB_PATH"
+
+    - name: Save verified Tauri CLI
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/music-manager-tauri-cli
+        key: ${{ steps.cache.outputs.cache-primary-key }}
