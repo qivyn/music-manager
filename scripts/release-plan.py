@@ -41,7 +41,11 @@ def plan(version, releases, tag_commit, sha):
     for release in releases:
         if release["tag_name"] == tag:
             if release["draft"]:
-                raise ValueError(f"已有 {tag} 的草稿 Release，请确认后删除再重试")
+                if release.get("target_commitish") != sha or f"<!-- music-manager-source:{sha} -->" not in release.get("body", ""):
+                    raise ValueError(f"已有 {tag} 的草稿 Release，但无法确认来自本次提交")
+                if tag_commit is not None and tag_commit != sha:
+                    raise ValueError(f"标签 {tag} 不是本次测试的提交")
+                return True, f"继续本次提交的 {tag} 草稿发布"
             return False, f"{tag} 已发布，不再构建或发布"
     # 按版本号比较，不按 GitHub 返回的时间顺序
     published = [parse(r["tag_name"][1:]) for r in releases
@@ -59,7 +63,7 @@ def gh(*args):
 
 
 def fetch_releases(repo):
-    lines = gh("--paginate", f"repos/{repo}/releases", "--jq", ".[] | {tag_name, draft, prerelease}")
+    lines = gh("--paginate", f"repos/{repo}/releases", "--jq", ".[] | {tag_name, draft, prerelease, target_commitish, body}")
     return [json.loads(line) for line in lines.splitlines() if line.strip()]
 
 

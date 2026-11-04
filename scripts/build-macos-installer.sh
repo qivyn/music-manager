@@ -34,17 +34,18 @@ cp "$source_app/Contents/Resources/icon.icns" "$installer/Contents/Resources/ico
 python3 - "$installer/Contents/Info.plist" "$version" <<'PY'
 import plistlib,sys
 with open(sys.argv[1],'wb') as f:
- plistlib.dump({'CFBundleIdentifier':'com.musicmanager.installer','CFBundleName':'安装与更新声场档案','CFBundleDisplayName':'安装与更新声场档案','CFBundleExecutable':'music-manager-installer','CFBundlePackageType':'APPL','CFBundleShortVersionString':sys.argv[2],'CFBundleVersion':sys.argv[2],'CFBundleIconFile':'icon.icns','LSMinimumSystemVersion':'10.15','NSHighResolutionCapable':True,'MusicManagerInAppUpdateProtocol':1},f)
+ plistlib.dump({'CFBundleIdentifier':'com.musicmanager.installer','CFBundleName':'安装与更新声场档案','CFBundleDisplayName':'安装与更新声场档案','CFBundleExecutable':'music-manager-installer','CFBundlePackageType':'APPL','CFBundleShortVersionString':sys.argv[2],'CFBundleVersion':sys.argv[2],'CFBundleIconFile':'icon.icns','LSMinimumSystemVersion':'10.15','NSHighResolutionCapable':True,'MusicManagerInAppUpdateProtocol':1,'MusicManagerInstallerProtocol':2},f)
 PY
 cat > "$work/image/请先阅读.txt" <<'EOF'
 双击“安装与更新声场档案”，然后点击“安装 / 更新”。无需运行命令。
-首次安装到当前用户的“应用程序”文件夹；已有版本会保持原安装位置。
+统一安装到系统“应用程序”；确认新版启动成功后清理已验证的旧位置副本。
 遇到问题时，在安装窗口中选择“重新尝试启动”“恢复旧版”或“导出诊断信息”。
 音乐库与音频独立保留。恢复旧版只恢复应用，会先检查数据库兼容性。
-请保留本 DMG；以后仍可打开安装窗口导出诊断信息或恢复旧版。
+确认成功后清理旧版。尚未完成的更新可在安装窗口重试、恢复或导出诊断。
 这是免费临时签名的安装包。若 macOS 首次阻止打开，请到“系统设置 → 隐私与安全性”允许打开。
 EOF
 /usr/bin/codesign --force --sign - "$installer"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$installer"
 hdiutil create -volname "声场档案 $version" -srcfolder "$work/image" -fs HFS+ -format UDZO "$output_dmg"
 hdiutil verify "$output_dmg"
+python3 "$script_dir/update-artifacts.py" --app "$source_app" --package "$output_dmg"

@@ -100,3 +100,21 @@ test("offline check shows an error rather than claiming the app is current", asy
     assert.match(c.state.message, /offline/);
     assert.equal(c.state.busy, false);
 });
+test("restoring a downloaded update after app restart does not recheck or redownload", async () => {
+    const {controller:c,calls}=setup({invoke:cmd=>cmd==='get_update_status'
+        ? {phase:'ready',transactionId:'update-saved',targetVersion:'0.2.8',currentVersion:'0.2.7',notes:'saved'} : undefined});
+    await c.restore();
+    assert.equal(c.state.phase,'ready');assert.equal(c.state.version,'0.2.8');
+    assert.deepEqual(calls,['get_update_status']);
+});
+test("rechecking preserves a verified ready package", async () => {
+    const {controller:c}=setup({invoke:()=>({version:'0.2.8',currentVersion:'0.2.7',downloaded:true})});
+    await c.check();assert.equal(c.state.phase,'ready');
+});
+test("progress from another transaction is ignored", async () => {
+    const work=deferred();
+    const {controller:c,progress}=setup({invoke:cmd=>cmd==='check_app_update'?{version:'0.2.8'}:work.promise});
+    await c.check();const request=c.download();c.state.transactionId='update-current';
+    progress({transactionId:'update-other',phase:'downloading',downloaded:999,total:1000});
+    assert.equal(c.state.downloaded,0);work.resolve();await request;
+});

@@ -5,12 +5,14 @@ use std::{fs, path::PathBuf, sync::Mutex};
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
+#[serde(rename_all="camelCase")]
 struct Report<'a> {
     protocol: u8,
     session: &'a str,
     pid: u32,
     version: &'a str,
     state: &'a str,
+    application_path: Option<String>,
 }
 
 pub fn write(state: &str) {
@@ -22,8 +24,9 @@ pub fn write(state: &str) {
     let path = PathBuf::from(path);
     if !path.is_absolute() || session.len() > 128 || session.is_empty() { return; }
     let report = Report {
-        protocol: 1, session: &session, pid: std::process::id(),
+        protocol: if std::env::var_os("MUSIC_MANAGER_STARTUP_PATH_CHECK").is_some(){2}else{1}, session: &session, pid: std::process::id(),
         version: crate::db::APP_VERSION, state,
+        application_path: std::env::current_exe().ok().and_then(|p|p.canonicalize().ok()).and_then(|p|p.parent()?.parent()?.parent().map(|p|p.to_string_lossy().into_owned())),
     };
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let temporary = path.with_extension(format!("{}.tmp", std::process::id()));

@@ -516,6 +516,54 @@ test('rebinding a stale record preserves metadata saved while its new audio is l
     assert.equal(a.tracks[0].path, '/new.mp3');
 });
 
+test('restart asks once with only confirm and cancel', async () => {
+    const a = app(), prompts = [];
+    a.context.window.__TAURI__.dialog.ask = async (message, options) => { prompts.push({ message, options }); return true; };
+    const release = await a.run('prepareApplicationUpdate()');
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].options.okLabel, '确认');
+    assert.equal(prompts[0].options.cancelLabel, '取消');
+    assert.match(prompts[0].message, /未保存的输入不会保留/);
+    assert.equal(typeof release, 'function');
+    assert.deepEqual(a.calls.map(c => c.command), ['prepare_update_exit']);
+    release();
+});
+
+for (const editor of ['detail', 'music', 'clip', 'tag']) {
+    test(`restart ignores unsaved ${editor} input without saving or blocking`, async () => {
+        const a = app(); a.tracks[0].name = 'Take  01';
+        if (editor === 'detail') {
+            await a.run("openDetail('m1')"); a.$('detailEditArtist').value = 'Unsaved artist';
+        } else if (editor === 'music') {
+            await a.run("openEditModalForMusic('m1')"); a.$('editName').value = '';
+        } else if (editor === 'clip') {
+            await a.run("openClipEditorForMusic('m1')"); a.$('clipName').value = 'Unsaved clip';
+        } else {
+            a.state.tagDraft = { type: 'create-tag', value: 'Unsaved tag', categoryId: 1 };
+        }
+        const before = clone({ tracks: a.tracks, clips: a.clips, tags: a.tags }); a.calls.length = 0;
+        // The update flow must never ask a second save/discard question.
+        a.context.window.__TAURI__.dialog.message = async () => { throw new Error('Unexpected draft dialog'); };
+        const release = await a.run('prepareApplicationUpdate()');
+        assert.equal(typeof release, 'function');
+        assert.deepEqual(a.calls.map(c => c.command), ['prepare_update_exit']);
+        assert.deepEqual(clone({ tracks: a.tracks, clips: a.clips, tags: a.tags }), before);
+        release();
+    });
+}
+
+test('cancelling restart keeps input and leaves the app usable without pausing writes', async () => {
+    const a = app({ confirmed: false }); await a.run("openDetail('m1')");
+    a.$('detailEditArtist').value = 'Keep this draft'; a.calls.length = 0;
+    a.context.window.__TAURI__.dialog.message = async () => { throw new Error('Unexpected draft dialog'); };
+    assert.equal(await a.run('prepareApplicationUpdate()'), null);
+    assert.equal(a.$('detailEditArtist').value, 'Keep this draft');
+    assert(!a.context.document.body.inert);
+    assert.equal(a.calls.length, 0);
+    assert.equal(await a.run("saveDetailEdit({artist:'Saved later'})"), true);
+    assert.equal(a.tracks[0].artist, 'Saved later');
+});
+
 test('restart waits for complete queued saves and quick tags, while refusing new edits', async () => {
     const read = deferred(), started = deferred(); let block = false;
     const a = app({ onInvoke: async cmd => { if (block && cmd === 'get_music') { block = false; started.resolve(); await read.promise; } } });
