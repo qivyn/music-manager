@@ -46,6 +46,29 @@ cat > "$work/image/请先阅读.txt" <<'EOF'
 EOF
 /usr/bin/codesign --force --sign - "$installer"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$installer"
-hdiutil create -volname "声场档案 $version" -srcfolder "$work/image" -fs HFS+ -format UDZO "$output_dmg"
-hdiutil verify "$output_dmg"
+# Keep candidates beside the destination so a verified image can be published
+# atomically without overwriting another build's output. Failed attempts never
+# occupy the final filename, including hdiutil's partially written images.
+dmg_work="$(mktemp -d "$(dirname "$output_dmg")/.music-manager-dmg.XXXXXX")"
+trap 'rm -rf "$work" "$dmg_work"' EXIT
+for attempt in 1 2 3; do
+  candidate="$dmg_work/attempt-$attempt.dmg"
+  if LC_ALL=C hdiutil create -volname "声场档案 $version" -srcfolder "$work/image" -fs HFS+ -format UDZO "$candidate" > "$dmg_work/create.log" 2>&1; then
+    cat "$dmg_work/create.log"
+    break
+  else
+    status=$?
+    cat "$dmg_work/create.log" >&2
+    if [[ "$attempt" == 3 ]] || ! grep -qF 'Resource busy' "$dmg_work/create.log"; then
+      exit "$status"
+    fi
+    echo "DMG 创建遇到 Resource busy，等待 $((attempt * 2)) 秒后重试（最多 3 次）。" >&2
+    sleep "$((attempt * 2))"
+  fi
+done
+hdiutil verify "$candidate"
+python3 - "$candidate" "$output_dmg" <<'PYFINAL'
+import os,sys
+os.link(sys.argv[1],sys.argv[2])  # Atomic, same filesystem, fails if destination exists.
+PYFINAL
 python3 "$script_dir/update-artifacts.py" --app "$source_app" --package "$output_dmg"
