@@ -183,3 +183,5 @@ bash scripts/test-macos-installer.sh
 版本改为 0.2.8 后，重新执行前端语法检查、Node 212 项、更新清单 3 项、发布判断 12 项、草稿发布 3 项、产物治理 4 项、Rust 70 项、Swift 安装器 79 项及原生窗口 4 项检查，全部通过、0 失败。`cargo build --locked` 和 `cargo tauri build --bundles app --target aarch64-apple-darwin` 均成功。
 
 实际执行 `bash scripts/build-macos-installer.sh <arm64 App> /private/tmp/music-manager-release-v028-20261104/music-manager_0.2.8_aarch64.dmg`，DMG、嵌套 ad-hoc 签名及 hdiutil 校验均通过，兼容元数据确认版本 0.2.8、架构 aarch64、schema 3，包摘要与实际 DMG 一致。此本地候选未安装、未公开上传；正式资产由合并后的 CI 重新构建和签名。
+
+首次 PR CI 在 Ubuntu 的两项产物测试中发现 `/private/tmp` 不存在（测试尚未进入断言）。已在 Linux CI 测试步骤创建该目录；未跳过测试，也未扩大验收清理允许的目录范围。修改后本地 22 项 Python 检查及 workflow YAML 语法检查通过；Linux 实际结果以随后 PR CI 为准。

@@ -45,6 +45,9 @@ jobs:
       - name: Run update feed and release plan tests
         run: |
           mkdir -p test-results
+          # Desktop fixture ownership is deliberately restricted to /private/tmp.
+          # Ubuntu runners do not provide macOS's directory layout by default.
+          sudo install -d -m 1777 /private/tmp
           python3 scripts/test-update-manifest.py 2>&1 | tee test-results/update-manifest.log
           python3 scripts/test-release-plan.py 2>&1 | tee test-results/release-plan.log
           python3 scripts/test-publish-release.py 2>&1 | tee test-results/publish-release.log

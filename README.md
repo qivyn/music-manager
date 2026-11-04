@@ -142,7 +142,7 @@ cd src-tauri && cargo tauri dev
 
 波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
 
-安装更新专用回归：`node --test scripts/test-updater.cjs scripts/test-review-regressions.cjs scripts/test-database-switch.cjs`、`python3 scripts/test-update-manifest.py`、`python3 scripts/test-release-plan.py`、`python3 scripts/test-publish-release.py`、`python3 scripts/test-update-artifacts.py`，以及 `bash scripts/test-macos-installer.sh`。覆盖下载恢复、更新确认/忽略草稿/等待已提交写入、签名兼容信息、草稿发布和临时产物归属。完整命令与实测限制见 [生命周期设计与验收](docs/installer-lifecycle.md)。
+安装更新专用回归：`node --test scripts/test-updater.cjs scripts/test-review-regressions.cjs scripts/test-database-switch.cjs`、`python3 scripts/test-update-manifest.py`、`python3 scripts/test-release-plan.py`、`python3 scripts/test-publish-release.py`、`python3 scripts/test-update-artifacts.py`，以及 `bash scripts/test-macos-installer.sh`。覆盖下载恢复、更新确认/忽略草稿/等待已提交写入、签名兼容信息、草稿发布和临时产物归属。完整命令与实测限制见 [生命周期设计与验收](docs/installer-lifecycle.md)。 Linux CI 执行隔离产物测试前会创建 `/private/tmp`，保持与 macOS 相同的验收目录约束；本机 macOS 无需额外准备。
 
 完整前端回归：`node --test scripts/test-*.cjs`。`scripts/test-review-regressions.cjs` 覆盖详情异步加载与连续保存、关闭编辑确认、播放取消与队列、拖入导入、失败重试、批量删除、播放历史缓存、导入专辑来源及预览生成。`src-tauri/src/commands_regression_tests.rs` 覆盖 WAV 原文件保护与完整输出、标签事务回滚、大库标签统计、专辑移动及离线资料编辑；发布流程会运行这些检查。
 
