@@ -39,8 +39,8 @@ function runLibraryOperation(work) {
 async function prepareApplicationUpdate() {
     if (databaseSwitchInProgress || applicationUpdateInProgress) throw new Error("其他操作尚未完成，请稍后更新");
     const accepted = await __TAURI__.dialog.ask(
-        "将退出声场档案，安装新版并重新打开。请先保存尚未保存的编辑。\n音乐库和音频会保留。",
-        { title: "重启并更新", kind: "info", okLabel: "重启并更新", cancelLabel: "暂不更新" }
+        "确认后将重启并安装更新，未保存的输入不会保留。",
+        { title: "重启并更新", kind: "info", okLabel: "确认", cancelLabel: "取消" }
     );
     if (!accepted) return null;
     if (databaseSwitchInProgress || applicationUpdateInProgress) throw new Error("其他操作尚未完成，请稍后更新");
@@ -52,12 +52,19 @@ async function prepareApplicationUpdate() {
         document.body.inert = previousInert;
         if (typeof refreshAfterApplicationUpdate === "function") void refreshAfterApplicationUpdate().catch(console.error);
     };
-    const results = await Promise.allSettled([...pendingLibraryOperations, ...pendingCommands]);
+    let timeout;
+    const drained = Promise.allSettled([...pendingLibraryOperations, ...pendingCommands]);
+    const results = typeof setTimeout === "function"
+        ? await Promise.race([drained, new Promise(resolve => {timeout = setTimeout(() => resolve(null), 60000);})]) : await drained;
+    if (timeout) clearTimeout(timeout);
+    if (!results) {release(); throw new Error("操作仍未完成，更新已取消，可稍后重试。");}
     if (results.some(result => result.status === "rejected")) {
         release();
         throw new Error("正在进行的操作未能完成，请处理错误后再更新。");
     }
-    return release;
+    try { await __TAURI__.core.invoke("prepare_update_exit"); }
+    catch(error) {release(); throw error;}
+    return () => {release(); void __TAURI__.core.invoke("abort_update_exit").catch(console.error);};
 }
 
 const TAG_GROUP_COLLAPSED_STORAGE_KEY = "music-library-tag-groups-collapsed";

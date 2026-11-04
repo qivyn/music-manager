@@ -3,6 +3,7 @@
 import argparse
 import base64
 import datetime
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -21,9 +22,17 @@ def create_manifest(version, directory, notes):
         decoded = base64.b64decode(signature, validate=True).decode("utf-8")
         if not decoded.startswith("untrusted comment:") or "trusted comment:" not in decoded:
             raise ValueError(f"Invalid signature format: {name}")
+        metadata_path = Path(str(artifact) + ".metadata.json")
+        metadata = metadata_path.read_bytes()
+        details = json.loads(metadata)
+        if details.get("version") != version or details.get("arch") != arch or details.get("sha256") != hashlib.sha256(artifact.read_bytes()).hexdigest():
+            raise ValueError(f"Compatibility metadata does not match package: {name}")
+        metadata_signature = Path(str(metadata_path) + ".sig").read_text().strip()
+        base64.b64decode(metadata_signature, validate=True)
         platforms[target] = {
-            "url": f"https://github.com/qivyn/music-manager/releases/download/v{version}/{name}",
+            "url": f"https://github.com/AI-AQI/music-manager/releases/download/v{version}/{name}",
             "signature": signature,
+            "compatibility": {"data": base64.b64encode(metadata).decode(), "signature": metadata_signature},
         }
     return {
         "version": version,

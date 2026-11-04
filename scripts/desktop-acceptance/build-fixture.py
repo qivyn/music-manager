@@ -7,24 +7,38 @@ Only copied Rust configuration and a separate IPC latency adapter differ from th
 """
 import hashlib
 import json
+import plistlib
+import io
+import tarfile
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+sys.dont_write_bytecode=True
+from fixture_support import manifest, record
 
 REPO = Path(__file__).resolve().parents[2]
 root = Path(sys.argv[1]).resolve()
 version = sys.argv[2]
 assert root.parent == Path('/private/tmp') and root.name.startswith('music-manager-desktop-')
 assert re.fullmatch(r'\d+\.\d+\.\d+', version)
-identifier = 'com.musicmanager.acceptance20261029'
+identifier = manifest(root)['identifier']
 origin = 'http://127.0.0.1:18764'
 work = root / ('source-' + version)
 assert not work.exists(), f'Preserve existing fixture: {work}'
-shutil.copytree(REPO / 'frontend', work / 'frontend')
-shutil.copytree(REPO / 'src-tauri', work / 'src-tauri', ignore=shutil.ignore_patterns('target', 'gen'))
+source_repo=REPO
+if len(sys.argv)>3:
+    ref=sys.argv[3]
+    assert re.fullmatch(r'v0\.2\.[67]',ref)
+    source_repo=root/('historical-'+ref)
+    source_repo.mkdir(exist_ok=True)
+    archive=subprocess.run(['git','archive',ref,'frontend','src-tauri'],cwd=REPO,check=True,capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(source_repo,filter='data')
+shutil.copytree(source_repo / 'frontend', work / 'frontend')
+shutil.copytree(source_repo / 'src-tauri', work / 'src-tauri', ignore=shutil.ignore_patterns('target', 'gen'))
 rust = work / 'src-tauri'
 public = (root / 'fixture-updater.key.pub').read_text().strip()
 (rust / 'updater-public-key.txt').write_text(public + '\n')
@@ -55,8 +69,14 @@ text = re.sub(r'let dir = std::path::PathBuf::from\(home\).*?;', 'let dir = ' + 
 p.write_text(text)
 p = rust / 'src/updater.rs'
 text = p.read_text().replace('com.musicmanager.installer', identifier + '.installer').replace('com.musicmanager.app', identifier)
-text = text.replace('https://github.com/qivyn/music-manager/releases/download', origin + '/releases/download')
+text = text.replace('https://github.com/qivyn/music-manager/releases/download', origin + '/releases/download').replace('https://github.com/AI-AQI/music-manager/releases/download', origin + '/releases/download')
 text = text.replace('app.path().app_cache_dir().map_err(|e| e.to_string())?', 'PathBuf::from(' + json.dumps(str(root / 'cache')) + ')')
+state_pattern='vec![PathBuf::from("/Library/Application Support/com.musicmanager.installer/system"),home.join("Library/Application Support/com.musicmanager.installer/user")]'
+state_pattern=state_pattern.replace('com.musicmanager.installer',identifier+'.installer')
+text = text.replace(state_pattern,'vec![PathBuf::from(' + json.dumps(str(root / 'logs/state')) + ')]')
+if 'fn installer_state_roots' in text:
+    assert str(root/'logs/state') in text, 'Installer transaction reads must stay isolated'
+
 text = text.replace('PathBuf::from("/Applications").join(APP_NAME), home.join("Applications").join(APP_NAME)', 'PathBuf::from(' + json.dumps(str(root / 'Applications')) + ').join(APP_NAME)')
 p.write_text(text)
 (root / 'gates').mkdir(exist_ok=True)
@@ -108,4 +128,10 @@ out=root / ('app-' + version + '.app')
 assert not out.exists()
 subprocess.run(['/usr/bin/ditto',str(REPO/'src-tauri/target/debug/bundle/macos/声场档案交叉验收.app'),str(out)],check=True)
 subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(out)],check=True)
+# Remove only this build's verified acceptance bundle from the shared Cargo output.
+bundle=REPO/'src-tauri/target/debug/bundle/macos/声场档案交叉验收.app'
+with (bundle/'Contents/Info.plist').open('rb') as file:
+    assert plistlib.load(file)['CFBundleIdentifier']==identifier
+shutil.rmtree(bundle)
+record(root,work,out)
 print(out)

@@ -438,6 +438,7 @@ pub fn probe_file(path: String) -> ProbeResult {
    解码走 symphonia（库内素材均为 mp3），编码走 hound。 */
 #[tauri::command]
 pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: String) -> Result<String, String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::DecoderOptions;
     use symphonia::core::formats::FormatOptions;
@@ -683,6 +684,7 @@ pub fn create_music(
     state: tauri::State<'_, AppState>,
     music: MusicInput,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启事务失败: {e}"))?;
 
@@ -729,6 +731,7 @@ pub fn update_music(
     state: tauri::State<'_, AppState>,
     music: MusicInput,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     update_music_in(&mut conn, &music)
 }
@@ -781,6 +784,7 @@ pub fn delete_music(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
 
     conn.execute(
@@ -794,6 +798,7 @@ pub fn delete_music(
 
 #[tauri::command]
 pub fn delete_music_batch(state: tauri::State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启批量删除音乐事务失败: {e}"))?;
     for id in ids {
@@ -860,6 +865,7 @@ pub fn list_music(
 /* 使用历史：开始播放时打点（前端按曲防抖，resume 不重复计数） */
 #[tauri::command]
 pub fn mark_music_played(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
     conn.execute(
         "UPDATE music SET last_played_at = ?1, play_count = COALESCE(play_count, 0) + 1 WHERE id = ?2",
@@ -986,6 +992,7 @@ pub fn create_clip(
     state: tauri::State<'_, AppState>,
     clip: ClipInput,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     validate_clip_range(clip.start, clip.end)?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启事务失败: {e}"))?;
@@ -1020,6 +1027,7 @@ pub fn update_clip(
     state: tauri::State<'_, AppState>,
     clip: ClipInput,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     validate_clip_range(clip.start, clip.end)?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启事务失败: {e}"))?;
@@ -1051,6 +1059,7 @@ pub fn delete_clip(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
 
     conn.execute(
@@ -1064,6 +1073,7 @@ pub fn delete_clip(
 
 #[tauri::command]
 pub fn delete_clip_batch(state: tauri::State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启批量删除片段事务失败: {e}"))?;
     for id in ids {
@@ -1197,6 +1207,7 @@ fn validate_tag(name: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub fn create_tag(state: tauri::State<'_, AppState>, name: String, category_id: Option<i64>, category: Option<String>, parent_id: Option<i64>) -> Result<TagRecord, String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let name = validate_tag(&name)?;
     let conn = lock_db!(state);
     let category_id = if let Some(parent) = parent_id {
@@ -1223,6 +1234,7 @@ pub fn create_tag(state: tauri::State<'_, AppState>, name: String, category_id: 
 
 #[tauri::command]
 pub fn update_tag(state: tauri::State<'_, AppState>, id: i64, name: String, category: Option<String>) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let name = validate_tag(&name)?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启 Tag 更新事务失败: {e}"))?;
@@ -1286,6 +1298,7 @@ pub fn list_tag_categories(state: tauri::State<'_, AppState>) -> Result<Vec<Stri
 
 #[tauri::command]
 pub fn create_tag_category(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let name = name.trim();
     if name.is_empty() { return Err("分类名称不能为空".into()); }
     let conn = lock_db!(state);
@@ -1296,6 +1309,7 @@ pub fn create_tag_category(state: tauri::State<'_, AppState>, name: String) -> R
 
 #[tauri::command]
 pub fn update_tag_category(state: tauri::State<'_, AppState>, old_name: String, name: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let old_name = old_name.trim();
     let name = name.trim();
     if old_name.is_empty() || name.is_empty() { return Err("分类名称不能为空".into()); }
@@ -1309,6 +1323,7 @@ pub fn update_tag_category(state: tauri::State<'_, AppState>, old_name: String, 
 
 #[tauri::command]
 pub fn delete_tag_category(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let name = name.trim();
     if name.is_empty() { return Err("分类名称不能为空".into()); }
 
@@ -1322,6 +1337,7 @@ pub fn delete_tag_category(state: tauri::State<'_, AppState>, name: String) -> R
 
 #[tauri::command]
 pub fn delete_tag(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     let tx = conn.transaction().map_err(|e| format!("开启删除 Tag 事务失败: {e}"))?;
     let parent_id: Option<i64> = tx.query_row("SELECT parent_id FROM tags WHERE id=?1", params![id], |row| row.get(0)).map_err(|_| "Tag 不存在")?;
@@ -1334,6 +1350,7 @@ pub fn delete_tag(state: tauri::State<'_, AppState>, id: i64) -> Result<(), Stri
 
 #[tauri::command]
 pub fn move_tag(state: tauri::State<'_, AppState>, id: i64, parent_id: Option<i64>, category_id: Option<i64>) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     move_tag_in(&mut conn, id, parent_id, category_id)
 }
@@ -1414,6 +1431,7 @@ pub fn set_album_tags(
     tag_ids: Vec<i64>,
     new_tags: Vec<String>,
 ) -> Result<Vec<i64>, String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     set_album_tags_in(&mut conn, &album, &tag_ids, &new_tags)
 }
@@ -1432,6 +1450,7 @@ fn set_album_tags_in(conn: &mut rusqlite::Connection, album: &str, tag_ids: &[i6
 
 #[tauri::command]
 pub fn delete_album_tags(state: tauri::State<'_, AppState>, album: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
     conn.execute("DELETE FROM album_tags WHERE album=?1", params![album])
         .map_err(|e| format!("删除专辑 Tag 失败: {e}"))?;
@@ -1474,6 +1493,7 @@ pub fn list_candidates(state: tauri::State<'_, AppState>) -> Result<Vec<Candidat
 
 #[tauri::command]
 pub fn create_candidate(state: tauri::State<'_, AppState>, target_id: String, kind: String, created_at: i64) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
     let exists = match kind.as_str() {
         "music" => conn
@@ -1498,6 +1518,7 @@ pub fn create_candidate(state: tauri::State<'_, AppState>, target_id: String, ki
 
 #[tauri::command]
 pub fn delete_candidate(state: tauri::State<'_, AppState>, target_id: String) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
     conn.execute("DELETE FROM candidate_entries WHERE target_id=?1", params![target_id])
         .map_err(|e| format!("删除候选失败: {e}"))?;
@@ -1506,6 +1527,7 @@ pub fn delete_candidate(state: tauri::State<'_, AppState>, target_id: String) ->
 
 #[tauri::command]
 pub fn clear_candidates(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let conn = lock_db!(state);
     conn.execute("DELETE FROM candidate_entries", [])
         .map_err(|e| format!("清空候选失败: {e}"))?;
@@ -1566,6 +1588,7 @@ fn apply_location_updates(conn: &mut rusqlite::Connection, updates: &[LocationUp
 /// every directory continuously.
 #[tauri::command]
 pub fn sync_library_locations(state: tauri::State<'_, AppState>) -> Result<LocationSyncResult, String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let entries = {
         let conn = lock_db!(state);
         let mut stmt = conn.prepare("SELECT id, path, album, album_source, file_bookmark FROM music")
@@ -1636,6 +1659,7 @@ pub fn set_database_location(
     dir: String,
     create_if_missing: bool,
 ) -> Result<String, String> {
+    let _operation = crate::operation_gate::WRITES.enter()?;
     let mut conn = lock_db!(state);
     let mut current_path = state
         .db_path

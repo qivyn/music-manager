@@ -351,12 +351,16 @@
         </div>
         <div class="modal-body update-body">
             <p id="updateVersion">声场档案</p>
+            <p id="updateInstallation" style="overflow-wrap:anywhere;white-space:pre-line"></p>
+            <button id="updateRevealBtn" class="secondary-btn" type="button">在 Finder 中显示</button>
             <p id="updateStatus" role="status" aria-live="polite"></p>
             <progress id="updateProgress" aria-label="更新下载进度" hidden></progress>
             <span id="updateProgressLabel" hidden></span>
             <div id="updateNotes" class="update-notes" hidden></div>
         </div>
         <div class="modal-footer">
+            <button id="updateCancelBtn" class="secondary-btn" type="button" hidden>取消下载</button>
+            <button id="updateCleanupBtn" class="secondary-btn" type="button" hidden>重试清理</button>
             <button id="updateRecheckBtn" class="secondary-btn" type="button" hidden>重新检查</button>
             <button id="updateActionBtn" class="primary-btn" type="button">检查更新</button>
         </div>

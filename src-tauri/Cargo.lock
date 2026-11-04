@@ -2318,10 +2318,12 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "music-manager"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "base64 0.22.1",
+ "futures-util",
  "hound",
+ "libc",
  "minisign-verify",
  "objc2",
  "objc2-foundation",
@@ -2329,6 +2331,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "symphonia",
  "tauri",
  "tauri-build",

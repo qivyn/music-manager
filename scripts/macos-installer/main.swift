@@ -1,5 +1,43 @@
 import AppKit
 
+// Every invocation, including reopening a cached installer, advertises its own lifetime.
+private let installerLease:URL? = {
+    let parent=Bundle.main.bundleURL.deletingLastPathComponent()
+    guard parent.lastPathComponent.hasPrefix("helper-"),parent.deletingLastPathComponent().lastPathComponent.hasPrefix("update-") else{return nil}
+    let path=parent.appendingPathComponent("active-installer-\(getpid()).json")
+    do {try durableWrite(JSONSerialization.data(withJSONObject:["pid":getpid()]),to:path);return path}
+    catch{return nil}
+}()
+atexit {if let lease=installerLease {try? FileManager.default.removeItem(at:lease)}}
+
+
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--installer-worker-session" {
+    do {try runInstallerWorkerSession(CommandLine.arguments[2]);exit(0)} catch {fputs(error.localizedDescription + "\n",stderr);exit(1)}
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--installer-worker" {
+    do {try runInstallerWorker([CommandLine.arguments[2]]);exit(0)} catch {fputs(error.localizedDescription + "\n",stderr);exit(1)}
+}
+
+
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--installer-maintain" {
+    do {
+        let fm=FileManager.default
+        let target=URL(fileURLWithPath:CommandLine.arguments[2])
+        let shared=URL(fileURLWithPath:"/Applications/声场档案.app")
+        let personal=fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications/声场档案.app")
+        guard [shared,personal].contains(target) else{throw InstallError("维护目标无效")}
+        let state=target==shared ? URL(fileURLWithPath:"/Library/Application Support/com.musicmanager.installer/system") : fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.musicmanager.installer/user")
+        let source=Bundle.main.resourceURL!.appendingPathComponent("声场档案.app")
+        let logs=fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/com.musicmanager.installer")
+        let engine=try Installer(source:source,destination:target,logRoot:logs,stateRoot:state)
+        if let error=engine.recoveryError{throw InstallError(error)}
+        try engine.cleanupCommitted();try engine.maintainEvidence()
+        let job=Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        if job.lastPathComponent.hasPrefix("update-") {try durableWrite(JSONSerialization.data(withJSONObject:["committed":true,"cleanupPending":false,"jobId":job.lastPathComponent,"installerSession":engine.receipt?.session ?? "","targetPath":target.path]),to:job.appendingPathComponent("committed.json"))}
+        closeInstallerWorker();exit(0)
+    }catch{fputs(error.localizedDescription + "\n",stderr);closeInstallerWorker();exit(1)}
+}
+
 final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var status: NSTextField!
@@ -11,6 +49,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     var installer: Installer?
     var busy = false
     var updateRequest: InAppUpdateRequest?
+    var packageVersion:NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -31,12 +70,15 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         heading.font = .systemFont(ofSize: 23, weight: .semibold)
         heading.frame = NSRect(x: 28, y: 274, width: 560, height: 36)
         content.addSubview(heading)
-        let subtitle = NSTextField(wrappingLabelWithString: "更新会退出正在运行的声场档案，并保留旧应用备份。音乐库和原始音频独立保留。")
+        let subtitle = NSTextField(wrappingLabelWithString: "安装成功后会清理旧版。失败时保留恢复材料；音乐库和原始音频独立保留。")
         subtitle.frame = NSRect(x: 28, y: 218, width: 560, height: 48)
         content.addSubview(subtitle)
+        packageVersion = NSTextField(labelWithString: "安装包版本：…")
+        packageVersion.frame = NSRect(x: 28, y: 190, width: 560, height: 22)
+        content.addSubview(packageVersion)
         status = NSTextField(wrappingLabelWithString: "正在读取安装信息…")
         status.isSelectable = true
-        status.frame = NSRect(x: 28, y: 90, width: 560, height: 114)
+        status.frame = NSRect(x: 28, y: 90, width: 560, height: 86)
         content.addSubview(status)
         spinner = NSProgressIndicator(frame: NSRect(x: 28, y: 70, width: 560, height: 12))
         spinner.style = .bar; spinner.isIndeterminate = true; spinner.isDisplayedWhenStopped = false
@@ -46,14 +88,17 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         restoreButton = button("恢复旧版", action: #selector(restore), x: 296, width: 110)
         exportButton = button("导出诊断信息", action: #selector(exportLogs), x: 414, width: 175)
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        configureInstaller()
+    }
+    func configureInstaller() {
         do {
             let fm = FileManager.default
             let shared = URL(fileURLWithPath: "/Applications/声场档案.app")
             let personal = fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications/声场档案.app")
             var logRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/com.musicmanager.installer")
             var identifier = "com.musicmanager.app"
-            // Keep an existing installation at its original location. Fresh installs don't need admin access.
-            var destination = fm.fileExists(atPath: shared.path) ? shared : personal
+            // All new installations and upgrades converge on the system Applications folder.
+            var destination = shared
             #if INSTALLER_UI_TESTS
             // Compiled only into the native UI test fixture, never the distributed installer.
             let testRoot = URL(fileURLWithPath: "/private/tmp/music-manager-installer-ui")
@@ -67,37 +112,65 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             let allowedDestinations = [shared, personal]
             #endif
             updateRequest = try InAppUpdateRequest.parse(Array(CommandLine.arguments.dropFirst()), allowedDestinations: allowedDestinations)
-            if let data = try? Data(contentsOf: logRoot.appendingPathComponent("latest.json")),
+            var selectedState=fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.musicmanager.installer/user")
+            if destination==shared{selectedState=URL(fileURLWithPath:"/Library/Application Support/com.musicmanager.installer/system")}
+            #if INSTALLER_UI_TESTS
+            selectedState=logRoot.appendingPathComponent("state")
+            #endif
+            let currentReceipt=selectedState.appendingPathComponent("latest.json")
+            let receiptFile=fm.fileExists(atPath:currentReceipt.path) ? currentReceipt : logRoot.appendingPathComponent("latest.json")
+            if let data = try? Data(contentsOf: receiptFile),
                let previous = try? JSONDecoder().decode(InstallReceipt.self, from: data) {
                 #if !INSTALLER_UI_TESTS
                 guard [shared.path, personal.path].contains(previous.destination) else {
                     throw InstallError("上次更新记录的安装位置异常，已停止安装。请联系开发者。")
                 }
-                if !previous.finished { destination = URL(fileURLWithPath: previous.destination) }
+                if !previous.finished && previous.destination != destination.path {
+                    throw InstallError("旧位置有未完成的安装事务，请先完成恢复，再安装到应用程序。")
+                }
                 #endif
-            }
-            if let request = updateRequest { destination = request.destination }
-            if destination == personal {
-                try fm.createDirectory(at: personal.deletingLastPathComponent(), withIntermediateDirectories: true)
             }
             let source = Bundle.main.resourceURL!.appendingPathComponent("声场档案.app")
             let info = try AppInfo.read(source, identifier: identifier)
-            installer = try Installer(source: source, destination: destination, logRoot: logRoot, identifier: identifier, progress: { [weak self] message in
+            var stateRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.musicmanager.installer/user")
+            if destination == shared {stateRoot=URL(fileURLWithPath:"/Library/Application Support/com.musicmanager.installer/system")}
+            #if INSTALLER_UI_TESTS
+            stateRoot=logRoot.appendingPathComponent("state")
+            #endif
+            installer = try Installer(source: source, destination: destination, logRoot: logRoot, identifier: identifier, stateRoot: stateRoot, progress: { [weak self] message in
                 DispatchQueue.main.async { self?.status.stringValue = message }
             })
-            status.stringValue = "安装包版本：\(info.version)\n安装位置：\(destination.path)\n\n点击“安装 / 更新”开始。失败后可以在这里恢复旧版或导出诊断信息。"
+            var origins:[URL] = []
+            if let request = updateRequest, request.destination != destination {origins.append(request.destination)}
+            #if !INSTALLER_UI_TESTS
+            if fm.fileExists(atPath:personal.path) {origins.append(personal)}
+            origins += NSRunningApplication.runningApplications(withBundleIdentifier:identifier).compactMap { $0.bundleURL }
+            #else
+            // Fixture migration discovery remains entirely inside the isolated root.
+            let legacy=testRoot.appendingPathComponent("Legacy/声场档案.app")
+            if fm.fileExists(atPath:legacy.path) {origins.append(legacy)}
+            #endif
+            installer?.migrationSources=Array(Set(origins)).filter {$0 != destination}.sorted {$0.path < $1.path}
+            packageVersion.stringValue = "安装包版本：\(info.version)"
+            status.stringValue = "点击“安装 / 更新”开始。失败后可以在这里恢复旧版或导出诊断信息。"
             if let error = installer?.recoveryError { status.stringValue = error }
             if let receipt = installer?.receipt, !["completed", "restored", "failed_before_replace"].contains(receipt.phase) {
                 status.stringValue = "检测到上次未完成的更新。\n可以重新尝试启动，或点击“恢复旧版”。旧应用备份和音乐库已保留。"
             }
             if let request = updateRequest, let installer = installer {
-                try installer.validateInAppUpdate(version: request.version)
-                try request.respond()
-                status.stringValue = "更新程序已就绪，正在等待声场档案退出…"
+                installer.cancelRequested={request.cancelled}
+                installer.downloadTransaction=request.reply.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+                status.stringValue = "正在准备目标安装，当前应用保持运行…"
                 perform(completion: { NSApp.terminate(nil) }) {
+                    do {try installer.validateInAppUpdate(version: request.version);try installer.prepare();try request.respond()}
+                    catch {try? request.respond(error:error.localizedDescription);throw error}
                     try request.waitForParentExit()
                     try installer.install()
                     _ = try installer.launch()
+                    if installer.receipt?.startupOutcome != nil {
+                        let job=request.reply.deletingLastPathComponent().deletingLastPathComponent()
+                        if job.lastPathComponent.hasPrefix("update-") {try durableWrite(JSONSerialization.data(withJSONObject:["committed":true,"cleanupPending":installer.receipt?.cleanupPending == true,"jobId":job.lastPathComponent,"installerSession":installer.receipt?.session ?? "","targetPath":installer.destination.path]),to:job.appendingPathComponent("committed.json"))}
+                    }
                 }
             }
         } catch {
@@ -124,7 +197,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             do { try work() } catch { failure = error }
             DispatchQueue.main.async {
                 self.busy = false; self.spinner.stopAnimation(nil); self.refreshButtons()
-                if let failure = failure { self.show(failure) }
+                if let failure = failure { if self.updateRequest?.cancelled==true {NSApp.terminate(nil)} else {self.show(failure)} }
                 else { completion?() }
             }
         }
@@ -139,9 +212,10 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         if busy { NSSound.beep() }
         return !busy
     }
+    func applicationWillTerminate(_ notification:Notification) {closeInstallerWorker()}
     @objc func install() {
         guard let installer = installer else { return }
-        perform { try installer.install(); _ = try installer.launch() }
+        perform { try installer.install(); _ = try installer.launch(); try? installer.maintainEvidence() }
     }
     @objc func retry() {
         guard let installer = installer else { return }

@@ -22,6 +22,7 @@ final class FakeIO: InstallerIO {
     var invalidSignatures: Set<String> = []
     var rosettaAvailable = true
     var translationProbes = 0
+    var failRemove = false
     var failCopy = false
     var failNewMove = false
     var busy = false
@@ -79,6 +80,9 @@ final class FakeIO: InstallerIO {
             if args[0] == failAfterMoveSource { throw InstallError("interrupted after rename") }
         } else if executable == "/bin/mkdir" {
             try fm.createDirectory(atPath: args[1], withIntermediateDirectories: true)
+        } else if executable == "/bin/rm" {
+            if failRemove {throw InstallError("cleanup denied")}
+            try fm.removeItem(atPath: args.last!)
         } else if args.first == "--installer-check-rollback" {
             rollbackChecked = true
             rollbackExecutable = executable
@@ -136,6 +140,192 @@ final class Fixture {
 }
 
 do {
+    try test("migration accepts the macOS private tmp system alias") {
+        let f=try Fixture(old:nil)
+        let root=URL(fileURLWithPath:"/private/tmp/mm-migration-alias-"+UUID().uuidString)
+        defer {try? fm.removeItem(at:root)}
+        let old=root.appendingPathComponent("声场档案.app")
+        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old]
+        try f.engine!.prepare()
+        try check(fm.fileExists(atPath:old.path),"source was removed during preparation")
+    }
+    try test("legacy location survives preparation and failure then is removed only after confirmed startup") {
+        let f=try Fixture(old:nil)
+        let legacy=f.root.appendingPathComponent("old-location/声场档案.app")
+        try f.app(legacy,version:"0.2.5",schema:3)
+        f.engine!.migrationSources=[legacy]
+        try f.engine!.install()
+        try check(fm.fileExists(atPath:legacy.path),"legacy removed before confirmation")
+        try f.reopen()
+        try f.readyExecutable(version:"0.2.6")
+        _ = try f.engine!.launch(timeout:5)
+        try check(!fm.fileExists(atPath:legacy.path),"confirmed relocation left original application")
+        try f.verifyLibrary()
+    }
+    try test("log rotation preserves unknown directories and removes only owned expired runs") {
+        let f=try Fixture();let oldRun=f.engine!.runDirectory
+        let unknown=f.logs.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at:unknown,withIntermediateDirectories:false)
+        try Data("unmanaged notes".utf8).write(to:unknown.appendingPathComponent("notes"))
+        try f.reopen()
+        for path in [oldRun,unknown]{try fm.setAttributes([.modificationDate:Date(timeIntervalSinceNow:-31*86400)],ofItemAtPath:path.path)}
+        try f.engine!.maintainEvidence()
+        try check(fm.fileExists(atPath:unknown.appendingPathComponent("notes").path),"unknown log directory deleted")
+        try check(!fm.fileExists(atPath:oldRun.path),"owned expired log retained")
+        try f.verifyLibrary()
+    }
+    try test("failed migration keeps legacy application and user data") {
+        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
+        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];f.io.failCopy=true
+        try fails("copy failure"){try f.engine!.install()}
+        try check(fm.fileExists(atPath:old.path),"failed migration deleted old app");try f.verifyLibrary()
+    }
+    try test("migration rejects replaced source before deleting and records cleanup retry") {
+        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
+        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
+        try Data("changed executable".utf8).write(to:old.appendingPathComponent("Contents/MacOS/music-manager"))
+        try f.readyExecutable(version:"0.2.6");_ = try f.engine!.launch(timeout:5)
+        try check(f.engine!.receipt!.phase=="completed" && f.engine!.receipt!.cleanupPending==true,"cleanup error rolled back success")
+        try check(fm.fileExists(atPath:old.path),"changed old app was removed");try f.verifyLibrary()
+    }
+    try test("migration rejects symlink unknown identity and newer legacy version") {
+        for mode in ["symlink","identity","newer"] {
+            let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
+            try f.app(old,version:mode=="newer" ? "0.2.9" : "0.2.5",schema:3)
+            if mode=="identity" {try Data("invalid".utf8).write(to:old.appendingPathComponent("Contents/Info.plist"))}
+            if mode=="symlink" {try fm.removeItem(at:old);try fm.createSymbolicLink(at:old,withDestinationURL:f.source)}
+            f.engine!.migrationSources=[old];try fails(mode){try f.engine!.prepare()};try f.verifyLibrary()
+        }
+    }
+    try test("migration cleanup can resume after source was removed before state save") {
+        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
+        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
+        f.engine!.receipt!.phase="completed";f.engine!.receipt!.startupOutcome="ready";f.engine!.receipt!.cleanupPending=true;try f.engine!.save()
+        try fm.removeItem(at:old);try f.reopen();try f.engine!.cleanupCommitted()
+        try check(f.engine!.receipt!.cleanupPending==false,"cleanup did not resume");try f.verifyLibrary()
+    }
+    try test("existing system installation and legacy source are both preserved until commit") {
+        let f=try Fixture();let old=f.root.appendingPathComponent("Legacy/声场档案.app")
+        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
+        try check(fm.fileExists(atPath:old.path) && fm.fileExists(atPath:f.engine!.receipt!.backup),"early removal")
+        try f.readyExecutable(version:"0.2.6");_ = try f.engine!.launch(timeout:5)
+        try check(!fm.fileExists(atPath:old.path) && !fm.fileExists(atPath:f.engine!.receipt!.backup),"committed copies remain")
+    }
+    try test("preparation stages before requesting exit and does not replace target") {
+        let f=try Fixture();f.engine!.downloadTransaction="update-shared";try f.engine!.prepare()
+        try check(f.engine!.receipt?.transactionId=="update-shared","download and install transaction IDs diverged")
+        try check(f.io.stopped==0,"preparation asked application to quit")
+        try check(try AppInfo.read(f.destination).version=="0.2.5","preparation changed installed app")
+        let session=f.engine!.receipt!.session
+        try f.engine!.prepare();try check(f.io.copies==1 && f.engine!.receipt!.session==session,"preflight duplicated stage")
+        try f.engine!.install();try check(f.io.copies==1,"publication copied stage twice")
+    }
+    try test("same-version executable changes after preparation are rejected") {
+        let f=try Fixture();try f.engine!.prepare()
+        try Data("changed executable".utf8).write(to:f.destination.appendingPathComponent("Contents/MacOS/music-manager"))
+        try fails("same-version target changed"){try f.engine!.install()}
+    }
+    try test("target changes after preparation cannot be overwritten") {
+        let f=try Fixture();try f.engine!.prepare();try f.app(f.destination,version:"0.2.7",schema:3)
+        try fails("changed target"){try f.engine!.install()}
+        try check(try AppInfo.read(f.destination).version=="0.2.7","changed target overwritten")
+    }
+    try test("transaction state survives removal of diagnostic logs") {
+        let f=try Fixture();let state=f.root.appendingPathComponent("state")
+        f.engine=nil;f.engine=try Installer(source:f.source,destination:f.destination,logRoot:f.logs,io:f.io,systemChecks:false,stateRoot:state)
+        try f.engine!.prepare();let session=f.engine!.receipt!.session;f.engine=nil
+        try fm.removeItem(at:f.logs)
+        f.engine=try Installer(source:f.source,destination:f.destination,logRoot:f.logs,io:f.io,systemChecks:false,stateRoot:state)
+        try check(f.engine!.receipt?.session==session,"state depended on logs")
+        try f.engine!.install();try f.verifyLibrary()
+    }
+    try test("committed cleanup of an Intel backup never requires Rosetta") {
+        let f=try Fixture();try f.reopen(systemChecks:true);try f.engine!.install()
+        let backup=f.engine!.receipt!.backup
+        f.io.architectures[backup+"/Contents/MacOS/music-manager"]="x86_64";f.io.rosettaAvailable=false
+        try f.readyExecutable(version:"0.2.6");_ = try f.engine!.launch(timeout:5)
+        try check(!fm.fileExists(atPath:backup),"Intel backup remained after native update")
+        try check(f.io.translationProbes==0,"cleanup attempted to execute translation")
+    }
+    try test("cancelled preparation removes its stage without touching installed app") {
+        let f=try Fixture();f.engine!.cancelRequested={f.io.copies>0}
+        try fails("cancel preparation"){try f.engine!.prepare()}
+        try check(!fm.fileExists(atPath:f.engine!.receipt!.staging),"cancel left a launchable stage")
+        try check(try AppInfo.read(f.destination).version=="0.2.5","cancel changed installed app")
+        try f.verifyLibrary()
+    }
+    try test("cleanup failure preserves committed state and retries without rollback") {
+        let f=try Fixture();try f.engine!.install();try f.readyExecutable(version:"0.2.6")
+        f.io.failRemove=true;_ = try f.engine!.launch(timeout:5)
+        try check(f.engine!.receipt!.phase=="completed" && f.engine!.receipt!.cleanupPending==true,"cleanup failure changed success")
+        try check(!f.engine!.canRestore,"committed transaction offers restore")
+        try fails("restore after commit"){try f.engine!.restore()}
+        f.io.failRemove=false;try f.engine!.cleanupCommitted()
+        try check(f.engine!.receipt!.cleanupPending==false,"cleanup retry not saved")
+    }
+    try test("history cleanup requires terminal validated transaction and explicit paths") {
+        let f=try Fixture();try f.engine!.install()
+        try check(f.engine!.historicalResidue().isEmpty,"unfinished backup offered for deletion")
+        f.engine!.receipt!.phase="completed";try f.engine!.save()
+        let paths=f.engine!.historicalResidue();try check(paths.count==1,"terminal backup not found")
+        try fails("unrelated cleanup"){try f.engine!.cleanHistoricalResidue([f.sentinel])}
+        try f.engine!.cleanHistoricalResidue(paths);try f.verifyLibrary()
+    }
+    try test("five consecutive confirmed updates leave no old applications") {
+        let f=try Fixture()
+        for patch in 6...10 {
+            f.engine?.launchedProcess?.terminate();f.engine?.launchedProcess?.waitUntilExit()
+            try f.app(f.source,version:"0.2.\(patch)",schema:3)
+            try f.reopen();try f.engine!.install();try f.readyExecutable(version:"0.2.\(patch)")
+            _ = try f.engine!.launch(timeout:5)
+            let backups=f.destination.deletingLastPathComponent().appendingPathComponent(".music-manager-backups")
+            let remaining=(fm.enumerator(at:backups,includingPropertiesForKeys:nil)?.allObjects as? [URL]) ?? []
+            try check(!remaining.contains{$0.pathExtension=="app"},"updates accumulated applications")
+            try f.verifyLibrary()
+        }
+    }
+    try test("startup path accepts macOS system aliases but rejects other applications") {
+        let root=URL(fileURLWithPath:"/private/tmp").appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at:root,withIntermediateDirectories:true);defer{try? fm.removeItem(at:root)}
+        let expected=root.appendingPathComponent("test.app").path
+        try fm.createDirectory(atPath:expected,withIntermediateDirectories:false)
+        let alias=expected.replacingOccurrences(of:"/private/tmp/",with:"/tmp/")
+        let data=try JSONSerialization.data(withJSONObject:["protocol":2,"session":"session","pid":123,"version":"0.2.8","state":"ready","applicationPath":alias])
+        try check(try evaluateStartup(data,session:"session",version:"0.2.8",pid:123,running:true,applicationPath:expected) == .ready,"system path alias rejected")
+    }
+    try test("startup protocol 2 requires the expected application path") {
+        let data=try JSONSerialization.data(withJSONObject:["protocol":2,"session":"session","pid":123,"version":"0.2.8","state":"ready","applicationPath":"/wrong.app"])
+        try check(try evaluateStartup(data,session:"session",version:"0.2.8",pid:123,running:true,applicationPath:"/right.app")==nil,"wrong path accepted")
+    }
+    try test("confirmed startup commits and removes the old application") {
+        let f = try Fixture()
+        try f.engine!.install()
+        try f.readyExecutable(version: "0.2.6")
+        let backup = f.engine!.receipt!.backup
+        _ = try f.engine!.launch(timeout: 5)
+        try check(!fm.fileExists(atPath: backup), "successful update retained a launchable old app")
+        try check(!f.engine!.canRestore, "committed update still offers rollback")
+        let lock=f.destination.deletingLastPathComponent().appendingPathComponent(".music-manager-installer.lock")
+        let fd=Darwin.open(lock.path,O_RDONLY);defer{if fd>=0{Darwin.close(fd)}}
+        try check(fd>=0 && flock(fd,LOCK_EX|LOCK_NB)==0,"successful installation kept launch lock")
+        try f.verifyLibrary()
+    }
+    try test("target lock cannot be bypassed with another user's log directory") {
+        let f = try Fixture()
+        try fails("same target with different logs") {
+            _ = try Installer(source: f.source, destination: f.destination,
+                              logRoot: f.root.appendingPathComponent("other-user-logs"), io: f.io, systemChecks: false)
+        }
+    }
+    try test("symlink installation targets are rejected without moving the link") {
+        let f = try Fixture()
+        let original = f.root.appendingPathComponent("original.app")
+        try fm.moveItem(at: f.destination, to: original)
+        try fm.createSymbolicLink(at: f.destination, withDestinationURL: original)
+        try fails("symlink destination") { try f.engine!.install() }
+        try check(try AppInfo.read(original).version == "0.2.5", "symlink referent changed")
+        try f.verifyLibrary()
+    }
     try test("a protected backup ancestor requests authorization while staging stays unprivileged") {
         let f = try Fixture()
         let backupRoot = f.destination.deletingLastPathComponent().appendingPathComponent(".music-manager-backups")
@@ -278,7 +468,7 @@ do {
             try check(try f.engine!.launch(timeout: 5) == .ready, "startup not confirmed")
             try check(f.engine!.receipt!.phase == "completed", "transaction still blocked")
             try check(f.engine!.receipt!.session == original.session && f.io.copies == 1, "created another replacement")
-            try check(try AppInfo.read(URL(fileURLWithPath: original.backup)).version == "0.2.2", "legacy backup lost")
+            try check(!fm.fileExists(atPath: original.backup), "confirmed startup retained legacy backup")
             f.engine!.launchedProcess?.terminate()
             f.engine!.launchedProcess?.waitUntilExit()
             try fails("legacy safety must still apply") { try f.engine!.restore() }

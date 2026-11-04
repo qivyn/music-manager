@@ -1,0 +1,1 @@
+{"arch": "aarch64", "expandedSize": 1024, "installerProtocol": 2, "minimumClientVersion": "0.2.6", "minimumSystemVersion": "10.15", "packageSize": 41, "publicKeyFingerprint": "6b05a0aeccbfde26eb9148039e90c9887e38217b22c57e1850cced8906e61614", "schema": 3, "sha256": "6a3566e3fddf1b128ac2d483a87f2554931b0bd281c78cd42fee8abea1f048dd", "startupProtocol": 1, "version": "0.2.8"}

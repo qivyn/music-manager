@@ -68,6 +68,13 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release_plan.plan("0.2.8", [release("v0.2.8", draft=True), release("v0.2.7")], None, SHA)
 
+    def test_same_commit_draft_can_be_retried(self):
+        draft = {**release("v0.2.8", draft=True), "body":"<!-- music-manager-source:" + SHA + " -->", "target_commitish":SHA}
+        self.assertTrue(release_plan.plan("0.2.8", [draft], None, SHA)[0])
+        draft["body"] = "<!-- music-manager-source:" + "b" * 40 + " -->"
+        with self.assertRaises(ValueError):
+            release_plan.plan("0.2.8", [draft], None, SHA)
+
     def test_tag_must_point_to_tested_commit(self):
         self.assertTrue(release_plan.plan("0.2.8", [release("v0.2.7")], SHA, SHA)[0])
         with self.assertRaises(ValueError):

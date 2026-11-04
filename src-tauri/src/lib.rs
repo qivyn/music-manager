@@ -1,8 +1,13 @@
 pub mod commands;
+pub mod operation_gate;
 pub mod db;
 pub mod startup_report;
 #[cfg(target_os = "macos")]
 pub mod updater;
+#[cfg(target_os = "macos")]
+pub mod update_store;
+#[cfg(target_os = "macos")]
+pub mod installer_bridge;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -15,6 +20,7 @@ pub struct AppState {
 struct DatabaseStartupLock(Mutex<()>);
 
 pub fn initialize_database(app: &tauri::AppHandle) -> Result<bool, String> {
+    let _operation = operation_gate::WRITES.enter()?;
     let startup = app.state::<DatabaseStartupLock>();
     let _guard = startup.0.lock().map_err(|e| format!("音乐库初始化锁获取失败: {e}"))?;
     if app.try_state::<AppState>().is_some() { return Ok(true); }
@@ -26,6 +32,7 @@ pub fn initialize_database(app: &tauri::AppHandle) -> Result<bool, String> {
 }
 
 pub fn configure_database_startup(app: &tauri::AppHandle, dir: &std::path::Path, create_new: bool) -> Result<(), String> {
+    let _operation = operation_gate::WRITES.enter()?;
     let startup = app.state::<DatabaseStartupLock>();
     let _guard = startup.0.lock().map_err(|e| format!("音乐库初始化锁获取失败: {e}"))?;
     if app.try_state::<AppState>().is_some() { return Err("音乐库已经打开，请使用“切换音乐库”".into()); }
@@ -60,8 +67,12 @@ fn set_dock_icon() {
     }
 }
 
+pub fn app_context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os="macos")]
+    if let Err(error)=installer_bridge::check_launch_lock() {eprintln!("{error}");return;}
     startup_report::install_panic_hook();
     startup_report::write("starting");
     tauri::Builder::default()
@@ -72,6 +83,13 @@ pub fn run() {
             {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.manage(updater::UpdateManager::default());
+                app.manage(installer_bridge::ExitRequests::default());
+                installer_bridge::start(app.handle()).map_err(std::io::Error::other)?;
+                let maintenance=app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    updater::automatic_cleanup(&maintenance);
+                });
             }
             #[cfg(all(target_os = "macos", debug_assertions))]
             set_dock_icon();
@@ -84,6 +102,23 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             #[cfg(target_os = "macos")]
             updater::check_app_update,
+            #[cfg(target_os = "macos")]
+            updater::get_installation_status,
+            #[cfg(target_os="macos")]
+            installer_bridge::respond_installer_exit,
+            #[cfg(target_os = "macos")]
+            updater::get_update_status,
+            #[cfg(target_os = "macos")]
+            updater::cancel_app_update,
+            #[cfg(target_os = "macos")]
+            updater::prepare_update_exit,
+            #[cfg(target_os = "macos")]
+            updater::abort_update_exit,
+            #[cfg(target_os = "macos")]
+            updater::retry_update_cleanup,
+            #[cfg(target_os = "macos")]
+            updater::show_installation_in_finder,
+
             #[cfg(target_os = "macos")]
             updater::download_app_update,
             #[cfg(target_os = "macos")]
@@ -135,6 +170,6 @@ pub fn run() {
             commands::get_audio_base_url,
             commands::sync_library_locations,
         ])
-        .run(tauri::generate_context!())
+        .run(app_context())
         .expect("error while running tauri application");
 }

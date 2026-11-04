@@ -1,7 +1,7 @@
 name: CI
 
 # PR 与 main 共用一条流水线：测试全部通过后，main 上版本号比已发布版本新时才构建并发布。
-# PR 只测试；只有改了版本号的 PR 才额外做双架构构建，提前发现打包问题。签名密钥只在 release 任务里使用。
+# PR 只测试和校验发布配置，不构建分发包。签名密钥只在 release 任务里使用。
 on:
   pull_request:
     branches: [main]
@@ -12,6 +12,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  TAURI_CLI_VERSION: '2.11.4'
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -45,8 +48,13 @@ jobs:
       - name: Run update feed and release plan tests
         run: |
           mkdir -p test-results
+          # Desktop fixture ownership is deliberately restricted to /private/tmp.
+          # Ubuntu runners do not provide macOS's directory layout by default.
+          sudo install -d -m 1777 /private/tmp
           python3 scripts/test-update-manifest.py 2>&1 | tee test-results/update-manifest.log
           python3 scripts/test-release-plan.py 2>&1 | tee test-results/release-plan.log
+          python3 scripts/test-publish-release.py 2>&1 | tee test-results/publish-release.log
+          python3 scripts/test-update-artifacts.py 2>&1 | tee test-results/update-artifacts.log
 
       - name: Preserve test evidence
         if: always()
@@ -127,7 +135,7 @@ jobs:
   build:
     name: Build DMG (${{ matrix.arch }})
     needs: [frontend, backend, plan]
-    if: needs.plan.outputs.newer == 'true' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.newer == 'true') || github.event_name == 'workflow_dispatch'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -165,9 +173,21 @@ jobs:
           mkdir -p test-results
           bash scripts/test-macos-installer.sh 2>&1 | tee test-results/installer.log
 
-      # CI 里没有 cargo-tauri，需要单独装；版本与本地保持一致，必要时升级
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version 2.11.4 --locked
+      # 独立缓存 CLI；不随应用版本/依赖变化失效，供同架构的构建与发布任务复用。
+      - name: Cache Tauri CLI
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/music-manager-tauri-cli
+          key: tauri-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.TAURI_CLI_VERSION }}
+
+      - name: Set up Tauri CLI
+        run: |
+          cli_root="$RUNNER_TEMP/music-manager-tauri-cli"
+          if [[ "$("$cli_root/bin/cargo-tauri" --version 2>/dev/null || true)" != "tauri-cli $TAURI_CLI_VERSION" ]]; then
+            cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked --root "$cli_root" --force
+          fi
+          test "$("$cli_root/bin/cargo-tauri" --version)" = "tauri-cli $TAURI_CLI_VERSION"
+          echo "$cli_root/bin" >> "$GITHUB_PATH"
 
       - name: Run backend regression tests on this architecture
         run: |
@@ -188,7 +208,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dmg-${{ matrix.arch }}-${{ github.sha }}
-          path: dist/music-manager_${{ needs.plan.outputs.version }}_${{ matrix.arch }}.dmg
+          path: dist/music-manager_${{ needs.plan.outputs.version }}_${{ matrix.arch }}.dmg*
           if-no-files-found: error
           retention-days: 30
 
@@ -229,6 +249,14 @@ jobs:
           fi
 
       # 构建期间可能已有其他发布，发布前再确认一次
+      - name: Verify legacy client repository redirect
+        run: |
+          actual="$(gh api repos/AI-AQI/music-manager --jq .full_name)"
+          if [[ "$actual" != "$GITHUB_REPOSITORY" ]]; then
+            echo "旧客户端仓库地址不再指向本仓库，拒绝发布不可升级的清单" >&2
+            exit 1
+          fi
+
       - name: Recheck release plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -243,8 +271,20 @@ jobs:
           workspaces: src-tauri
           key: release
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version 2.11.4 --locked
+      - name: Cache Tauri CLI
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/music-manager-tauri-cli
+          key: tauri-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.TAURI_CLI_VERSION }}
+
+      - name: Set up Tauri CLI
+        run: |
+          cli_root="$RUNNER_TEMP/music-manager-tauri-cli"
+          if [[ "$("$cli_root/bin/cargo-tauri" --version 2>/dev/null || true)" != "tauri-cli $TAURI_CLI_VERSION" ]]; then
+            cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked --root "$cli_root" --force
+          fi
+          test "$("$cli_root/bin/cargo-tauri" --version)" = "tauri-cli $TAURI_CLI_VERSION"
+          echo "$cli_root/bin" >> "$GITHUB_PATH"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -257,7 +297,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
-          expected="$(printf 'music-manager_%s_aarch64.dmg\nmusic-manager_%s_x64.dmg\n' "$VERSION" "$VERSION")"
+          expected="$(printf 'music-manager_%s_aarch64.dmg\nmusic-manager_%s_aarch64.dmg.metadata.json\nmusic-manager_%s_x64.dmg\nmusic-manager_%s_x64.dmg.metadata.json\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION")"
           if [[ "$(ls dist)" != "$expected" ]]; then
             echo "构建产物与 v$VERSION 不符：" >&2
             ls -l dist >&2
@@ -266,7 +306,9 @@ jobs:
           for arch in aarch64 x64; do
             asset="dist/music-manager_${VERSION}_${arch}.dmg"
             cargo tauri signer sign "$asset"
-            cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify-update -- "$asset" "$asset.sig"
+            cargo tauri signer sign "$asset.metadata.json"
+            cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify-update -- "$asset" "$asset.sig" --trusted-key src-tauri/updater-trusted-public-key.txt
+            cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify-update -- "$asset.metadata.json" "$asset.metadata.json.sig" --trusted-key src-tauri/updater-trusted-public-key.txt
           done
 
       - name: Create signed-package update feed
@@ -277,11 +319,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sed "s/{{version}}/$VERSION/g" docs/release-notes.md > "$RUNNER_TEMP/release-notes.md"
-          gh release create "v$VERSION" \
-            dist/*.dmg dist/*.sig dist/latest.json scripts/install-macos.sh \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "v$VERSION" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" \
-            --generate-notes
+          cp scripts/install-macos.sh dist/install-macos.sh
+          python3 scripts/publish-release.py --version "$VERSION" --directory dist --notes docs/release-notes.md

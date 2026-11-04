@@ -43,14 +43,14 @@
 
 1. 按 Mac 芯片选择 DMG：M 系列下载 `aarch64`；Intel 下载 `x64`。
 2. 打开新格式 DMG，双击「安装与更新声场档案」，点击「安装 / 更新」。无需输入命令或安装开发环境。
-3. 首次安装到当前用户的「应用程序」文件夹；已有 `/Applications/声场档案.app` 或 `~/Applications/声场档案.app` 会在原位置更新，必要时系统会请求管理员授权。
+3. 统一安装到系统“应用程序”。已识别的旧位置副本会在新版启动确认后删除；安装失败保留旧版，授权取消后停止安装。
 4. 等待安装窗口显示结果。新电脑没有音乐库配置时，在声场档案窗口中选择「打开已有音乐库」或「创建新音乐库」。移动硬盘没有连接时，按提示连接后重试。
 
 若 macOS 首次阻止安装器打开，请按 **「系统设置 → 隐私与安全性」** 中的单应用允许流程操作，详见 [Apple 说明](https://support.apple.com/zh-cn/102445)。免费的 ad-hoc 签名不等于 Apple Developer ID 签名或公证，不能保证所有系统和设备策略都会允许打开。
 
 ### 在 App 内升级
 
-首次安装支持应用内更新的版本后，点击右上角 **「更新」→「下载更新」→「重启并更新」**。程序会匹配 Mac 芯片、验证更新包签名，退出后安全替换并重新打开。日常升级无需再次下载 DMG 或运行脚本。
+首次安装支持应用内更新的版本后，点击右上角 **「更新」→「下载更新」→「重启并更新」**。更新面板显示当前安装路径、架构和其他标准副本，并可在 Finder 定位。程序验证已签名的兼容信息及安装包，先暂存；点击「重启并更新」后只需「确认 / 取消」。确认后忽略未保存的输入，不自动保存音乐、片段或标签草稿；等待已提交的操作完成后退出、替换并重新打开。已验证下载跨重启复用；下载及准备阶段可取消。确认安装成功后清理旧版，不长期保留可启动的备份。日常升级无需再次下载 DMG 或运行脚本。
 
 v0.2.5 及更早的已发布版本没有此入口，需要先手动安装首个支持更新的版本。发布方需先配置更新签名 Secret，详见 [安装与更新说明](docs/macos-installer.md)。
 
@@ -63,10 +63,10 @@ v0.2.5 及更早的已发布版本没有此入口，需要先手动安装首个�
 保留 DMG，重新打开其中的安装窗口即可：
 
 - **重新尝试启动**：确认本次启动的实际结果，区分界面就绪、等待选择音乐库、音乐库不可用及启动失败。
-- **恢复旧版**：先退出应用并检查数据库兼容性，再恢复旧应用。音乐库不会被恢复操作复制或覆盖。无法确认兼容性、硬盘未连接、旧版早于 v0.2.5 且缺少安全元数据时，会保留备份并停止恢复。
+- **恢复旧版（仅未完成更新）**：先退出应用并检查数据库兼容性，再恢复旧应用。音乐库不会被恢复操作复制或覆盖。无法确认兼容性、硬盘未连接、旧版早于 v0.2.5 且缺少安全元数据时，会保留备份并停止恢复。
 - **导出诊断信息**：保存 ZIP 发给开发者，无需自己找日志。每次启动的日志独立保留，重试不会覆盖首次失败信息。不包含数据库、位置配置文件或音频，但日志和崩溃报告可能包含本机路径，请仅发给信任的人。
 
-新版先复制、校验，再退出旧应用并保留备份。替换失败时会尝试恢复原应用；启动失败不会擅自降级。异常断电后可重新打开安装窗口处理未完成的更新。
+新版先复制、校验，再确认退出旧应用并等待已提交的操作完成，提交前临时保留备份。替换失败时会尝试恢复原应用；启动失败不会擅自降级。中断后可重新打开安装窗口处理未完成的更新。确认成功后不再提供旧版恢复；后续故障使用同版修复安装或更高版本。安装窗口不提供历史清理或位置选择入口；更新面板仅在清理未完成时提供重试。详见 [生命周期设计与验收](docs/installer-lifecycle.md)。
 
 `scripts/install-macos.sh` 仅保留旧命令的兼容入口，`--replace` 会打开同一个安装窗口，不再直接移除旧应用。旧 DMG 缺少图形化入口时会停止，要求下载新版。
 
@@ -138,9 +138,13 @@ cd src-tauri && cargo tauri dev
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
-每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。测试全部通过后，若版本号比已发布版本新，就在 Apple Silicon 和 Intel 上分别构建 DMG；推送到 `main` 时再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的提交只测试、不发布，手动运行只构建不发布。
+每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。PR 无论是否修改版本号，都只测试和校验发布配置，不构建 App/DMG。合并到 `main` 后，测试全部通过且版本号比已发布版本新时，才在 Apple Silicon 和 Intel 上各构建一次 App/DMG，再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的 `main` 提交只测试、不发布；手动运行仍会测试并构建两个架构，但不发布。打包问题会在合并后阻止发布，需要合并前确认打包时可手动运行。
+
+Tauri CLI 使用按系统、架构和 CLI 版本区分的独立缓存，构建与发布任务共用；命中后核对版本直接使用，首次运行或缓存失效时才安装。`node --test scripts/test-ci-workflow.cjs` 直接验证工作流的构建/发布条件和 CLI 缓存命中、缺失及旧版本处理，不需要修改每个 PR 的工作流。
 
 波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
+
+安装更新专用回归：`node --test scripts/test-updater.cjs scripts/test-review-regressions.cjs scripts/test-database-switch.cjs`、`python3 scripts/test-update-manifest.py`、`python3 scripts/test-release-plan.py`、`python3 scripts/test-publish-release.py`、`python3 scripts/test-update-artifacts.py`，以及 `bash scripts/test-macos-installer.sh`。覆盖下载恢复、更新确认/忽略草稿/等待已提交写入、签名兼容信息、草稿发布和临时产物归属。完整命令与实测限制见 [生命周期设计与验收](docs/installer-lifecycle.md)。 Linux CI 执行隔离产物测试前会创建 `/private/tmp`，保持与 macOS 相同的验收目录约束；本机 macOS 无需额外准备。
 
 完整前端回归：`node --test scripts/test-*.cjs`。`scripts/test-review-regressions.cjs` 覆盖详情异步加载与连续保存、关闭编辑确认、播放取消与队列、拖入导入、失败重试、批量删除、播放历史缓存、导入专辑来源及预览生成。`src-tauri/src/commands_regression_tests.rs` 覆盖 WAV 原文件保护与完整输出、标签事务回滚、大库标签统计、专辑移动及离线资料编辑；发布流程会运行这些检查。
 
@@ -154,7 +158,7 @@ cd src-tauri && cargo tauri dev
 
 应用图标使用与奶油色首页一致的「蜷睡白猫与灰玫瑰色音符」，采用轻柔的奶油白和浅暖色阴影，无装饰边框、深色猫咪描边或唱片元素。插画原图为 `src-tauri/app-icon-artwork.png`，生成提示词见 [图标设计记录](docs/design/app-icon.prompt.txt)。修改插画后，在项目根目录运行 `node scripts/generate-app-icons.cjs`，通过无描边的圆角裁切生成 `src-tauri/app-icon.png`，并同步生成开发模式 Dock 和各平台打包图标。
 
-发版不需要手动打标签：在合并到 `main` 的 PR 中同步更新 `src-tauri/Cargo.toml`、`Cargo.lock` 与 `src-tauri/tauri.conf.json` 的版本号，并写好 `docs/update-notes.txt` 与 `docs/release-notes.md`，合并后 CI 测试通过即自动构建两个架构、签名并发布。标签与 Release 由 CI 创建，对应通过测试的那个提交。
+发版不需要手动打标签：在合并到 `main` 的 PR 中同步更新 `src-tauri/Cargo.toml`、`Cargo.lock` 与 `src-tauri/tauri.conf.json` 的版本号，并写好 `docs/update-notes.txt` 与 `docs/release-notes.md`，合并后 CI 测试通过即自动构建两个架构、签名；先上传草稿并核对远端资产大小与摘要，再公开发布。标签与 Release 由 CI 创建，对应通过测试的那个提交。
 
 本地从项目根目录构建（以 Apple Silicon 为例）：
 
@@ -170,7 +174,9 @@ Intel 使用 `x86_64-apple-darwin`，DMG 文件名后缀使用 `x64`。打包脚
 
 应用和安装器均进行完整 ad-hoc 签名，发布前校验签名与 DMG 完整性。编译 Swift 只发生在开发者/CI 环境，使用者无需安装 Swift、Python、Node 或 Rust。免费签名不能代替 Apple 公证。
 
-安装器回归测试：`bash scripts/test-macos-installer.sh`。更多实现细节及测试边界见 [安装器说明](docs/macos-installer.md)。
+安装器主窗口沿用原来的四个按钮：安装 / 更新、重新尝试启动、恢复旧版、导出诊断信息；重试与恢复按事务状态启用。正常界面不显示安装路径，不提供位置选择、查看位置或历史清理入口。
+
+安装器回归测试：`bash scripts/test-macos-installer.sh`。本机窗口布局检查：`python3 scripts/test-installer-ui.py`（需要可用的 macOS 图形会话；仅创建窗口，不读取安装或执行安装）。更多实现细节及测试边界见 [安装器说明](docs/macos-installer.md)。
 
 ### 常用命令(增删改查)
 
@@ -267,3 +273,5 @@ Intel 使用 `x86_64-apple-darwin`，DMG 文件名后缀使用 `x64`。打包脚
 ## License
 
 私有项目,仅供内部分发使用。
+
+旧位置迁移只处理可验证的来源：当前更新客户端、运行中的正式旧应用、用户“应用程序”内的旧副本及已持久化的本次迁移记录，不扫描全盘。开发产物、DMG 中的应用和身份不符的副本不自动删除。已发布的 0.2.6/0.2.7 若在自定义位置拒绝检查更新，请打开新版 DMG；保持旧应用运行以供识别，按提示保存并退出后继续安装。旧位置未完成的恢复事务须先处理，不能覆盖唯一恢复材料。

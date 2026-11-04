@@ -1,6 +1,6 @@
 [package]
 name = "music-manager"
-version = "0.2.7"
+version = "0.2.8"
 description = "声场档案 - 本地音乐素材管理"
 authors = ["qi"]
 edition = "2021"
@@ -33,6 +33,9 @@ tauri-plugin-updater = "2"
 base64 = "0.22"
 minisign-verify = "0.2"
 semver = "1"
+sha2 = "0.10"
+futures-util = "0.3"
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1
