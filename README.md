@@ -138,7 +138,9 @@ cd src-tauri && cargo tauri dev
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
-每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。测试全部通过后，若版本号比已发布版本新，就在 Apple Silicon 和 Intel 上分别构建 DMG；推送到 `main` 时再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的提交只测试、不发布，手动运行只构建不发布。
+每个 PR 和推送到 `main` 的提交都会运行 `.github/workflows/ci.yml`：在 Ubuntu 上做前端语法检查、`node --test scripts/test-*.cjs`、更新清单与发版判断测试，在 macOS 上运行 `cargo test --locked --lib` 与安装器测试。PR 无论是否修改版本号，都只测试和校验发布配置，不构建 App/DMG。合并到 `main` 后，测试全部通过且版本号比已发布版本新时，才在 Apple Silicon 和 Intel 上各构建一次 App/DMG，再签名并自动创建 `v<版本号>` 标签与 Release。版本号没变的 `main` 提交只测试、不发布；手动运行仍会测试并构建两个架构，但不发布。打包问题会在合并后阻止发布，需要合并前确认打包时可手动运行。
+
+Tauri CLI 使用按系统、架构和 CLI 版本区分的独立缓存，构建与发布任务共用；命中后核对版本直接使用，首次运行或缓存失效时才安装。`node --test scripts/test-ci-workflow.cjs` 直接验证工作流的构建/发布条件和 CLI 缓存命中、缺失及旧版本处理，不需要修改每个 PR 的工作流。
 
 波形失败与重试回归：`node --test scripts/test-waveform.cjs`。覆盖音频离线、HTTP 读取失败及解码失败时无未处理的 Promise 拒绝，失败后可重试，成功结果复用缓存。
 

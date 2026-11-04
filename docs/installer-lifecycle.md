@@ -185,3 +185,13 @@ bash scripts/test-macos-installer.sh
 实际执行 `bash scripts/build-macos-installer.sh <arm64 App> /private/tmp/music-manager-release-v028-20261104/music-manager_0.2.8_aarch64.dmg`，DMG、嵌套 ad-hoc 签名及 hdiutil 校验均通过，兼容元数据确认版本 0.2.8、架构 aarch64、schema 3，包摘要与实际 DMG 一致。此本地候选未安装、未公开上传；正式资产由合并后的 CI 重新构建和签名。
 
 首次 PR CI 在 Ubuntu 的两项产物测试中发现 `/private/tmp` 不存在（测试尚未进入断言）。已在 Linux CI 测试步骤创建该目录；未跳过测试，也未扩大验收清理允许的目录范围。修改后本地 22 项 Python 检查及 workflow YAML 语法检查通过；Linux 实际结果以随后 PR CI 为准。
+
+### CI 构建规则调整（2026-11-04）
+
+用户确认不在 PR 和合并后重复构建分发包。规则直接写入 `.github/workflows/ci.yml`，随本 PR 合并后长期生效：PR 无论版本是否变化都只测试与校验发布配置；main 新版本通过测试后双架构各构建一次，再签名发布；手动运行仍测试并构建、不发布。打包错误会在合并后阻止发布，需要合并前核验包时可手动运行。README、AGENTS.md 同步更新，不要求逐个 PR 修改规则。
+
+Tauri CLI 2.11.4 使用按系统、架构和 CLI 版本划分的独立缓存，由构建与发布任务共用；从缓存恢复后校验版本，仅缺失或版本不符时安装。缓存 Action 固定官方 v6.1.0 提交。原有应用依赖缓存、测试、签名权限和草稿发布门禁保留。
+
+新增 `node --test scripts/test-ci-workflow.cjs`，直接执行工作流条件与 CLI 准备脚本：修复前 5 通过 / 9 失败，修改后 14 通过 / 0 失败。完整回归实际结果：Node 226、Python 22、Rust 70、Swift 安装器 79 项全部通过、0 失败；两个前端语法检查、`actionlint .github/workflows/ci.yml`、Ruby YAML 解析与 `git diff --check` 均通过。本次仅工作流/测试/说明变化，不重复实际 App 安装升级；已有 v0.2.8 App/DMG 构建和隔离窗口证据继续适用。
+
+前一提交 `74af477` 的 [PR CI](https://github.com/qivyn/music-manager/actions/runs/41767484149) 已确认 Linux 测试、Apple Silicon 后端/安装器及 arm64 DMG 构建成功。新规则的 PR 跳过行为以推送后运行核验；CLI 缓存实际命中与 main 发布路径尚需后续构建运行确认，不将本地模拟写成线上实测。
