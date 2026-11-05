@@ -184,6 +184,17 @@ test("restart waits for in-flight library work before calling backend", async ()
     drained.resolve(() => {}); await restarting;
     assert.ok(calls.includes("restart_for_app_update"));
 });
+test("restart reports waiting only after the confirmation is accepted", async () => {
+    const drained = deferred(); let confirm;
+    const { controller: c } = setup({ prepareRestart: onConfirmed => { confirm = onConfirmed; return drained.promise; } });
+    await c.check(); await c.download();
+    const ready = c.state.message;
+    const restarting = c.restart();
+    assert.equal(c.state.message, ready, "panel claimed work had started while the dialog was open");
+    confirm();
+    assert.match(c.state.message, /等待当前操作完成/);
+    drained.resolve(() => {}); await restarting;
+});
 test("offline check shows an error rather than claiming the app is current", async () => {
     const { controller: c } = setup({ invoke: () => { throw new Error("offline"); } });
     await c.check();

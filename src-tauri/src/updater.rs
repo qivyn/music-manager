@@ -46,12 +46,29 @@ type CommandResult<T> = Result<T,UpdateError>;
 #[tauri::command]
 pub async fn export_update_diagnostics(app: tauri::AppHandle, destination: PathBuf, context: serde_json::Value) -> CommandResult<()> {
     if serde_json::to_vec(&context).map_err(|e|e.to_string())?.len()>32_768 {return Err("诊断上下文过长".into());}
-    let id=if app.config().identifier=="com.musicmanager.app" {"com.musicmanager.installer".to_string()}
-        else {format!("{}.installer",app.config().identifier)};
-    let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);
+    let logs=installer_log_root(&app)?;
     let states=installer_state_roots(&app)?;let cache=cache_root(&app)?;
     Ok(tauri::async_runtime::spawn_blocking(move || diagnostics::export_to(&destination,&logs,&states,&cache,&context))
         .await.map_err(|e|e.to_string())??)
+}
+fn installer_log_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let id=if app.config().identifier=="com.musicmanager.app" {"com.musicmanager.installer".to_string()}
+        else {format!("{}.installer",app.config().identifier)};
+    let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);
+    Ok(logs)
+}
+/// An installer window holds this lock while it works (older releases: while open).
+/// Checking first avoids quitting into a handoff that cannot proceed.
+fn ensure_no_active_installer(logs: &Path) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let lock = logs.join("installer.lock");
+    update_store::reject_links(&lock)?;
+    let Ok(file) = fs::File::open(&lock) else { return Ok(()) };
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 { return Ok(()); }
+    let holder = fs::read_to_string(&lock).ok().and_then(|s| s.trim().parse::<i32>().ok())
+        .filter(|pid| *pid > 1 && unsafe { libc::kill(*pid, 0) } == 0)
+        .map(|pid| format!("（进程 {pid}）")).unwrap_or_default();
+    Err(format!("另一个“安装与更新声场档案”窗口正在运行{holder}。请切换到那个窗口：正在安装时请等待完成；已经空闲时按 ⌘Q 退出，然后重试。当前应用未被修改。"))
 }
 
 #[derive(Default)]
@@ -259,8 +276,7 @@ fn installed_location(executable: &Path, home: &Path) -> Result<PathBuf, String>
     let executable_path=normalize_system_path(executable);
     let executable=executable_path.as_path();
     let app = executable.parent().and_then(Path::parent).and_then(Path::parent).ok_or("无法确认应用安装位置")?;
-    // This is the running source, not the replacement target. The installer always
-    // writes /Applications and removes a verified legacy source only after commit.
+    // This is both the running source and the replacement target: updates happen in place.
     let _ = home;
     if app.file_name().and_then(|s|s.to_str()) != Some(APP_NAME)
         || executable != app.join("Contents/MacOS/music-manager")
@@ -347,6 +363,7 @@ pub async fn restart_for_app_update(app: tauri::AppHandle, state: tauri::State<'
         &std::env::current_exe().map_err(|e| e.to_string())?,
         &app.path().home_dir().map_err(|e| e.to_string())?,
     )?;
+    ensure_no_active_installer(&installer_log_root(&app)?)?;
     crate::operation_gate::WRITES.pause(Duration::from_secs(60))?;
     progress(&app, "preparing", 0, None);
     let cancel_path = job.join("cancel-request");
@@ -406,7 +423,7 @@ fn load_cached(app: &tauri::AppHandle) -> Result<Option<CachedUpdate>, String> {
 #[serde(rename_all="camelCase")]
 pub struct InstallationStatus {
     installation_path: String, current_version: String, arch: String, can_update: bool,
-    other_installations: Vec<String>, message: String,
+    other_installations: Vec<String>, message: String, needs_authorization: bool,
 }
 fn installation(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let path = installed_location(&std::env::current_exe().map_err(|e|e.to_string())?, &app.path().home_dir().map_err(|e|e.to_string())?)?;
@@ -423,8 +440,14 @@ pub fn get_installation_status(app: tauri::AppHandle) -> CommandResult<Installat
     let home = app.path().home_dir().map_err(|e|e.to_string())?;
     let other_installations = [PathBuf::from("/Applications").join(APP_NAME), home.join("Applications").join(APP_NAME)]
         .into_iter().filter(|p|normalize_system_path(p) != path && p.exists()).map(|p|p.to_string_lossy().into_owned()).collect();
+    // Replacing the app in place needs a password only when this user cannot write its folder.
+    let needs_authorization = path.parent().is_some_and(|parent| !directory_writable(parent));
     Ok(InstallationStatus { installation_path:path.to_string_lossy().into_owned(),current_version:crate::db::APP_VERSION.into(),arch:asset_arch()?.into(),
-        can_update:result.is_ok(),other_installations,message:result.err().unwrap_or_default() })
+        can_update:result.is_ok(),other_installations,message:result.err().unwrap_or_default(),needs_authorization })
+}
+fn directory_writable(path:&Path)->bool{
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes()).is_ok_and(|p| unsafe{libc::access(p.as_ptr(),libc::W_OK|libc::X_OK)}==0)
 }
 #[tauri::command]
 pub fn show_installation_in_finder(app: tauri::AppHandle) -> CommandResult<()> {
@@ -491,8 +514,9 @@ fn pending_cleanup(root:&Path)->bool{
     fs::read_dir(root).ok().into_iter().flatten().flatten().any(|e|e.path().join("committed.json").is_file())
 }
 fn installer_state_roots(app:&tauri::AppHandle)->Result<Vec<PathBuf>,String>{
+    // Installation records are per user; there is no system-wide installer state.
     let home=app.path().home_dir().map_err(|e|e.to_string())?;
-    Ok(vec![PathBuf::from("/Library/Application Support/com.musicmanager.installer/system"),home.join("Library/Application Support/com.musicmanager.installer/user")])
+    Ok(vec![home.join("Library/Application Support/com.musicmanager.installer/user")])
 }
 fn marker_is_committed(marker:&serde_json::Value,id:&str,states:&[PathBuf])->bool{
     if marker["committed"]!=true || marker["cleanupPending"]==true || marker["jobId"]!=id{return false;}
@@ -606,6 +630,21 @@ mod tests {
         cleanup_downloads(&root,&[states.clone()]).unwrap();assert!(root.join("update-owned").exists());
         fs::remove_file(lease).unwrap();
         cleanup_downloads(&root,&[states]).unwrap();assert!(!root.join("update-owned").exists());assert!(root.join("update-unknown").exists());
+    }
+    #[test]
+    fn active_installer_window_blocks_handoff_and_names_its_process() {
+        use std::os::fd::AsRawFd;
+        let temp=tempfile::tempdir().unwrap();
+        assert!(ensure_no_active_installer(temp.path()).is_ok());
+        let lock=temp.path().join("installer.lock");
+        fs::write(&lock,format!("{}\n",std::process::id())).unwrap();
+        assert!(ensure_no_active_installer(temp.path()).is_ok(), "an unlocked file is not an active installer");
+        let holder=fs::File::open(&lock).unwrap();
+        assert_eq!(unsafe{libc::flock(holder.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)},0);
+        let message=ensure_no_active_installer(temp.path()).unwrap_err();
+        assert!(message.contains(&format!("进程 {}",std::process::id())) && message.contains("⌘Q"), "{message}");
+        drop(holder);
+        assert!(ensure_no_active_installer(temp.path()).is_ok());
     }
     #[test]
     fn concurrent_update_operations_are_rejected_and_failures_release_lock() {

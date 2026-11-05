@@ -36,14 +36,16 @@ function runLibraryOperation(work) {
     return task;
 }
 
-async function prepareApplicationUpdate() {
+async function prepareApplicationUpdate(needsAuthorization = false, onConfirmed = null) {
     if (databaseSwitchInProgress || applicationUpdateInProgress) throw new Error("其他操作尚未完成，请稍后更新");
     const accepted = await __TAURI__.dialog.ask(
-        "确认后将重启并安装更新，未保存的输入不会保留。",
-        { title: "重启并更新", kind: "info", okLabel: "确认", cancelLabel: "取消" }
+        "声场档案将退出，安装新版后自动重新打开。未保存的输入不会保留，音乐库和音频不受影响。"
+            + (needsAuthorization ? "\n当前账户不能直接写入安装位置，系统会请求管理员密码。" : ""),
+        { title: "退出并安装更新？", kind: "info", okLabel: "退出并安装", cancelLabel: "取消" }
     );
     if (!accepted) return null;
     if (databaseSwitchInProgress || applicationUpdateInProgress) throw new Error("其他操作尚未完成，请稍后更新");
+    if (onConfirmed) onConfirmed();
     applicationUpdateInProgress = true;
     const previousInert = document.body.inert;
     document.body.inert = true;

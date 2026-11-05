@@ -521,11 +521,22 @@ test('restart asks once with only confirm and cancel', async () => {
     a.context.window.__TAURI__.dialog.ask = async (message, options) => { prompts.push({ message, options }); return true; };
     const release = await a.run('prepareApplicationUpdate()');
     assert.equal(prompts.length, 1);
-    assert.equal(prompts[0].options.okLabel, '确认');
+    assert.equal(prompts[0].options.okLabel, '退出并安装');
     assert.equal(prompts[0].options.cancelLabel, '取消');
     assert.match(prompts[0].message, /未保存的输入不会保留/);
+    assert.doesNotMatch(prompts[0].message, /管理员密码/);
     assert.equal(typeof release, 'function');
     assert.deepEqual(a.calls.map(c => c.command), ['prepare_update_exit']);
+    release();
+});
+
+test('restart warns about a password only when the install folder needs it, after confirming', async () => {
+    const a = app(), prompts = [], order = [];
+    a.context.window.__TAURI__.dialog.ask = async (message) => { prompts.push(message); order.push('ask'); return true; };
+    a.context.onConfirmed = () => order.push('confirmed');
+    const release = await a.run('prepareApplicationUpdate(true, onConfirmed)');
+    assert.match(prompts[0], /管理员密码/);
+    assert.deepEqual(order, ['ask', 'confirmed']);
     release();
 });
 

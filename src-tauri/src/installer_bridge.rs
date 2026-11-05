@@ -52,9 +52,8 @@ pub fn check_launch_lock()->Result<(),String>{
     let exe=std::env::current_exe().map_err(|e|e.to_string())?;
     let Some(target)=exe.parent().and_then(|p|p.parent()).and_then(|p|p.parent())else{return Ok(())};
     if target.extension().and_then(|s|s.to_str())!=Some("app"){return Ok(())}
-    let lock=if target==std::path::Path::new("/Applications/声场档案.app"){
-        PathBuf::from("/Library/Application Support/com.musicmanager.installer/system/target.lock")
-    }else{target.parent().unwrap().join(".music-manager-installer.lock")};
+    // The installer locks the folder it replaces the app in, including /Applications.
+    let lock=target.parent().unwrap().join(".music-manager-installer.lock");
     update_store::reject_links(&lock)?;
     let Ok(file)=fs::File::open(lock)else{return Ok(())};
     use std::os::fd::AsRawFd;

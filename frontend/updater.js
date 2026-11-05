@@ -73,10 +73,11 @@
         }
         async function restart() {
             if (state.busy || state.phase !== "ready") return;
-            state.busy = true; state.errorAction = ""; state.message = "正在准备更新，等待当前操作完成…"; notify();
+            // The confirmation dialog comes first; only then does the panel report waiting.
+            state.busy = true; state.errorAction = ""; notify();
             let release;
             try {
-                release = await prepareRestart();
+                release = await prepareRestart(() => { state.message = "正在等待当前操作完成…"; notify(); });
                 if (!release) { state.message = "更新已下载，你可以稍后重启安装。"; return; }
                 state.phase = "preparing"; state.message = "正在准备安装，可取消；当前应用保持运行…"; notify();
                 await invoke("restart_for_app_update");
@@ -170,7 +171,7 @@
     const controller = createUpdaterController({
         invoke: (command, args) => api.core.invoke(command, args),
         listen: (event, handler) => api.event.listen(event, handler),
-        prepareRestart: () => prepareApplicationUpdate(),
+        prepareRestart: onConfirmed => prepareApplicationUpdate(Boolean(installation?.needsAuthorization), onConfirmed),
         chooseDiagnosticsPath: () => api.dialog.save({
             title: "导出更新诊断信息（不含音乐库或音频）",
             defaultPath: `声场档案更新诊断-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`,
@@ -194,7 +195,8 @@
             action.disabled = state.busy || state.phase === "restarting" || installation?.canUpdate === false;
             if (cancel) {cancel.hidden = !["downloading", "verifying", "preparing"].includes(state.phase); cancel.textContent = state.phase === "preparing" ? "取消准备" : "取消下载"; cancel.disabled = !state.busy;}
             if (cleanup) cleanup.hidden = !state.cleanupPending;
-            action.textContent = state.phase === "ready" ? "重启并更新"
+            action.textContent = ["preparing", "restarting"].includes(state.phase) ? "正在准备…"
+                : state.phase === "ready" ? "重启并更新"
                 : ["available", "downloading", "verifying"].includes(state.phase) ? "下载更新" : state.errorAction === "check" ? "重试检查" : "检查更新";
             recheck.hidden = !["ready", "available"].includes(state.phase);
             recheck.disabled = state.busy;
