@@ -1,5 +1,193 @@
 # 安装与更新生命周期（未发版）
 
+## 2026-11-05：更新窗口重新排版与诊断文件定位
+
+更新窗口改为版本信息、更新状态、诊断结果和底部主操作四个层次。安装路径、原始错误、诊断保存路径默认折叠；错误状态优先展示简短说明和诊断操作，更新说明在独立区域滚动。保留浅色/深色主题，小窗口下内容滚动、底部主操作固定可见。
+
+诊断 ZIP 保存成功后通过现有 `opener.revealItemInDir` 自动在 Finder 中选中该文件，窗口显示文件名及“在 Finder 中显示诊断文件”按钮。再次定位不重新导出；Finder 打开失败时保留已成功保存的文件与原更新错误，允许重试定位。取消重新导出保留上次文件及定位入口。原始错误仍进入诊断上下文，并可展开“错误详情”查看。无需新增 IPC 命令或扩大权限。
+
+先增加回归复现缺少自动定位/重试行为，再实现新交互。新增覆盖：导出与定位顺序、再次定位不重新导出、Finder 失败后重试、取消/导出失败不打开 Finder、取消第二次导出保留第一份文件、简短提示与原始错误分离。原有仅检查“已导出 + 路径”文案的断言随新需求改为检查成功标题、文件名及实际定位调用，导出次数和原错误保留的断言继续保留。
+
+实际验证：
+
+| 命令 / 验收 | 结果 |
+|---|---|
+| `node --check frontend/app.js`、`node --check frontend/updater.js` | 通过 |
+| `node --test scripts/test-*.cjs` | 269 通过，0 失败 |
+| `python3 scripts/test-update-manifest.py`、`test-release-plan.py`、`test-publish-release.py`、`test-update-artifacts.py`、`test-local-update.py` | 分别 4、12、8、4、12 通过，合计 40 |
+| `(cd src-tauri && cargo test --locked --offline --lib)` | 76 通过，0 失败 |
+| `bash scripts/test-macos-installer.sh` | 91 通过，0 失败 |
+| `node frontend/.preview/build-preview.cjs frontend/index.html frontend/preview.html` + 本机 HTTP 服务 + `shot.mjs` | 浅色导出结果、暗色 900×600 最小窗口、长更新说明均通过；截图已读取，页面异常/console error 为 0 |
+| 隔离原生 App 构建与窗口操作 | 实际点击导出并通过系统对话框保存；Finder 自动选中 ZIP。关闭该 Finder 窗口后点击新按钮，再次打开并选中同一 ZIP |
+| `CARGO_NET_OFFLINE=true cargo tauri build --bundles app --target aarch64-apple-darwin` | 通过 |
+| `bash scripts/build-macos-installer.sh <App> /private/tmp/music-manager-update-ui-production-20261105/music-manager_0.2.8_aarch64.dmg` | 签名、DMG 完整性及兼容元数据通过 |
+
+完整回归合计 476 项通过。原生验证根目录 `/private/tmp/music-manager-desktop-local-layout-20261105`，证据为 `evidence/finder-layout-result.json` 与 `exports/新版更新诊断.zip`；再次定位前后 ZIP 的修改时间和 SHA-256 均不变。已确认原始错误、启动尝试日志保留，未包含音乐库、设置、音频或 DMG；原生 App 的 `updater.js` 和 `style.css` 与当前工作区一致。
+
+预览图和页面日志位于 `/private/tmp/music-manager-update-layout-20261105`，包含 `cream-export-final.png`、`night-minimum-final.png`、`ready-notes.png`。Finder 无法打开的分支通过注入失败的回归测试覆盖，未修改系统权限来制造原生拒绝。Intel、跨账户和真实系统目录提权仍未实测；版本号未修改，未提交或发布。
+
+## 2026-11-05：提交前 review 与最终验证
+
+本轮检查旧位置记录迁移、协议 1 失败响应、原生诊断导出、开发入口和本地测试目录的隔离/重置/清理。发现主应用诊断包遗漏安装器实际写在 `<事务>/attempts/<启动令牌>/` 下的启动日志；先加入真实目录结构的回归，修复前测试失败（ZIP 只有 summary），再补充最近五个会话各最多五次启动尝试的已知文件收集。文件名白名单、UUID 目录校验、符号链接拒绝和单文件 2 MB 限制保留。
+
+新增回归覆盖 `application.log`、`startup.json`、`attempt.json`、`error.txt`，确认跳过数据库、未知目录和符号链接。修复后通过真实隔离 App 的“软件更新 → 导出诊断信息”及系统保存对话框导出，实际 ZIP 中的三份启动尝试文件与此前真实隔离升级留下的文件逐字节一致，原更新错误仍显示。隔离根目录：`/private/tmp/music-manager-desktop-local-review-20261105`；证据：`exports/review-startup-attempts.zip` 和 `evidence/review-export.json`。测试应用的诊断模块源码摘要与最终工作区一致。
+
+最终实际执行：
+
+| 命令 / 验收 | 结果 |
+|---|---|
+| `node --check frontend/app.js`、`node --check frontend/updater.js` | 通过 |
+| `node --test scripts/test-*.cjs` | 264 通过，0 失败 |
+| `python3 scripts/test-update-manifest.py` | 4 通过 |
+| `python3 scripts/test-release-plan.py` | 12 通过 |
+| `python3 scripts/test-publish-release.py` | 8 通过 |
+| `python3 scripts/test-update-artifacts.py` | 4 通过 |
+| `python3 scripts/test-local-update.py` | 12 通过 |
+| `(cd src-tauri && cargo test --locked --offline --lib)` | 76 通过，0 失败 |
+| `bash scripts/test-macos-installer.sh` | 91 通过，0 失败 |
+| `(cd src-tauri && cargo build --locked --offline)` | 通过 |
+| `CARGO_NET_OFFLINE=true cargo tauri build --bundles app --target aarch64-apple-darwin` | 通过 |
+| `bash scripts/build-macos-installer.sh <App> /private/tmp/music-manager-review-production-20261105/music-manager_0.2.8_aarch64.dmg` | 签名、DMG 完整性和兼容元数据通过 |
+| `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过 |
+
+本轮修复后的完整回归共 471 项通过。目前未发现阻止提交的问题。0.2.6/0.2.7 升级、原生保存/取消/Finder 及本地开发入口的既有验收见下方记录；本轮仅补诊断收集路径，没有改安装替换流程。真实系统目录管理员授权、跨账户及 Intel 实机仍未验证；PR CI/`CI Ready` 尚未触发。没有修改正式数据、版本号或发布资产。
+
+## 2026-11-04：可重复使用的本地更新测试入口
+
+新增 macOS 开发构建参数，用户在平时运行开发模式的 `src-tauri` 目录执行：
+
+```bash
+cargo tauri dev --no-watch -- -- --local-update-test
+```
+
+参数在 Tauri Builder、正式配置和音乐库初始化之前分流到 `scripts/local-update-test.py`。启动器使用独立 identifier、自动分配的回环端口、临时签名密钥、生成的测试 WAV/SQLite，以及隔离的旧 App 与更高版本更新 DMG。剥离外层 `cargo tauri dev` 注入的 `TAURI_CONFIG`、`TAURI_ENV_*` 和签名环境变量，避免覆盖隔离配置或使用正式私钥。默认测试当前源码版本到下一个补丁版本；可指定 `--from-version 0.2.6` / `0.2.7`。正式版本号保持 0.2.8。
+
+终端支持 `success`、`install-failure`、`bad-signature` 场景，`repair` 修复模拟故障，`open` 重新打开当前 App，`status` 查看事务，`quit` 清理测试 App/包并保留数据与日志。场景切换复用已构建的包，保留测试库；正在运行的安装器、未知身份 App、符号链接和缺失基础包会阻止破坏性重置。正常开发命令不变，正式 release 构建拒绝测试参数并在初始化前退出。
+
+本轮通过用户将实际使用的完整命令启动，根目录 `/private/tmp/music-manager-desktop-local-e2e-20261104`，动态更新源为 `http://127.0.0.1:65490`。真实原生窗口操作完成：
+
+- `install-failure`：检查、下载、签名校验、确认更新后出现安装记录错误；终端 `repair` 后从同一窗口重试，完成 0.2.8 → 临时 0.2.9 的真实替换和启动。事务 `completed` / `ready` / `cleanupPending=false`，样例曲目、片段、设置与 WAV 摘要一致。
+- `bad-signature`：从终端重置到旧 App，无重新编译；原生窗口下载后明确报签名失败，不能重启安装。终端 `repair` 恢复原签名字节，再下载通过，界面恢复“重启并更新”。
+- `success`：从终端恢复正常测试场景，旧 App 重新打开，样例数据保留。
+- `quit`：启动命令正常退出，测试 App/更新包清理，测试库与证据保留。
+
+实际检查：
+
+| 命令 / 项目 | 结果 |
+|---|---|
+| `node --check frontend/app.js`、`node --check frontend/updater.js` | 通过 |
+| `node --test scripts/test-*.cjs` | 264 通过，0 失败 |
+| `python3 scripts/test-update-manifest.py` | 4 通过 |
+| `python3 scripts/test-release-plan.py` | 12 通过 |
+| `python3 scripts/test-publish-release.py` | 8 通过 |
+| `python3 scripts/test-update-artifacts.py` | 4 通过 |
+| `python3 scripts/test-local-update.py` | 12 通过；已接入 CI |
+| `(cd src-tauri && cargo test --locked --offline --lib)` | 75 通过，0 失败 |
+| `bash scripts/test-macos-installer.sh` | 91 通过，0 失败 |
+| `(cd src-tauri && cargo build --locked --offline)` | 通过 |
+| `CARGO_NET_OFFLINE=true cargo tauri build --bundles app --target aarch64-apple-darwin` | 通过 |
+| 生产配置 App 执行 `--local-update-test --help` | 按设计返回退出码 2，无应用初始化 |
+| `bash scripts/build-macos-installer.sh <App> /private/tmp/music-manager-local-update-production-20261104/music-manager_0.2.8_aarch64.dmg` | DMG、签名与兼容元数据通过 |
+| `actionlint .github/workflows/ci.yml`、`git diff --check` | 通过 |
+
+入口帮助实测为 `cargo tauri dev --no-watch -- -- --local-update-test --help`；Tauri 实际转发为 `cargo run ... -- --local-update-test --help`。本轮没有改前端交互代码，因此沿用前轮已完成的浏览器预览和原生导出检查，并新增上述启动器真实窗口验收。证据位于本次根目录 `evidence/before.json`、`upgrade-success.json`、`signature-scenario.json`、`local-cli-result.json`；原生截图已在聊天中读取。
+
+限制：本轮新入口的完整窗口验收使用当前源码 0.2.8 → 临时 0.2.9；历史 0.2.6/0.2.7 的真实升级见下方已有记录，新入口的历史版本参数通过规划/参数校验，未在本轮再次完整跑旧版 GUI。Intel 实机、跨账户与真实系统目录提权未验证。测试 App 以本机独立目录为安装目标，不替代正式 `/Applications` 提权验收。未提交、未发布，PR CI 尚未触发。
+
+## 2026-11-04：补齐最终代码的原生窗口验收
+
+本次补齐下方记录中“原生鼠标操作、保存对话框和 Finder 未视觉验收”的缺口。使用可用的原生桌面控制直接点击 App 和系统对话框；没有注入自动更新操作或模拟保存对话框。产品代码未修改，原有完整回归及生产配置 App/DMG 构建结果仍适用于当前代码。
+
+隔离根目录为 `/private/tmp/music-manager-desktop-native-final-20261104`，identifier 为 `com.musicmanager.acceptance.c7aaa825f284`。由 `v0.2.6` 标签构建原客户端，由当前代码构建 0.2.8 和临时测试版本 0.2.9；0.2.9 只用于触发新版更新失败，没有修改项目版本或发布。应用、安装目标、记录、下载源和音乐库均独立。
+
+已从真实窗口完成：
+
+1. 原版 0.2.6 点击“更新”、下载、点击“重启并更新”并在原生确认框确认。故意损坏的隔离记录触发失败；Finder 自动显示并选中“声场档案更新诊断.zip”，旧应用仍运行，报错中准确显示同一 ZIP 路径。已读取旧应用截图并检查 ZIP 内的原错误，不含数据库、设置或音频。
+2. 恢复有效的隔离旧记录，再次从原版窗口确认更新。0.2.8 正常打开并显示原测试曲目，事务 `completed` / `ready` / `cleanupPending=false`；旧 App 清理，旧记录按原字节归档，数据比对一致。
+3. 新版窗口检查并下载临时 0.2.9 包，确认更新，故意损坏的新状态触发真实安装交接失败。失败后“导出诊断信息”按钮可用。
+4. 实际点击导出，系统保存对话框正常出现。点击 Cancel 后回到原错误，未生成输出文件。再点击导出，通过系统“前往文件夹”选择本次 `exports` 目录并保存 `native-diagnostics-success.zip`；主窗口同时显示导出成功路径和原更新错误，按钮恢复可用。
+5. 检查实际 ZIP 的 CRC、上下文（当前 0.2.8、目标 0.2.9、原错误）、损坏安装记录和日志；不含 `library.db`、`settings.json`、音频或 DMG。取消、失败、升级及导出后的测试库业务行、位置配置、音频 SHA-256 与基线一致，仍仅排除正常启动可变化的书签、音乐更新时间和应用版本元数据。
+
+安装器启动新版时 macOS 将临时路径显示为 `/tmp`，Tauri updater 因该系统别名拒绝初始化。已退出测试应用并从规范 `/private/tmp` 路径重新打开后继续验收；没有放宽生产路径或签名校验。取消保存的检查以真实对话框、原错误保留和输出文件不存在为证据；本次没有记录导出 IPC 次数，不以缺少事件日志推断次数。
+
+额外实际执行 `python3 scripts/test-installer-ui.py`，四项原生安装器窗口检查通过。此前与当前产品代码对应的结果已再次核对：Node 264、Rust 73、安装器 91、Python 28 项均通过；两个 Node 语法检查、Rust build、Apple Silicon App/DMG 构建及校验通过。当前 `git diff --check` 通过。源码摘要检查确认本次原生验收的 `app.js`、`updater.js`、`style.css`、`update_diagnostics.rs` 与工作区一致。
+
+证据在本次隔离根目录的 `evidence/native-ui-result.json`、`legacy-native-failure.json`、`cancel-save.json`、`before.json`、`after-legacy-failure.json`、`after-native-upgrade.json`、`after-native-export.json`，以及 `exports/native-diagnostics-success.zip`。原生窗口截图已在本次聊天中读取；窗口动作与最终可见结果由原生桌面工具返回。
+
+本地要求的原生窗口验证已补齐。真实系统目录提权、跨账户、Intel 实机及实体移动硬盘仍列为未验证环境；本次没有操作正式安装或真实音乐库。提交需用户明确授权，PR 双架构 CI 和 `CI Ready` 尚未触发，不能声明通过；版本保持 0.2.8，未发布。
+
+## 2026-11-04：补充诊断入口与原版 0.2.6 升级验收
+
+应用内更新面板新增“导出诊断信息”及单独的导出结果提示。选择 ZIP 保存位置后调用 `export_update_diagnostics`，保留原更新错误；取消保存不写文件，导出期间禁止重复操作。后端独立收集最近五次安装/交接的已知日志文件、安装状态与当前错误上下文；单文件最多 2 MB，跳过符号链接和不可读文件并记录遗漏，不打包音乐库、设置、音频或更新 DMG。记录损坏或安装器未启动也能导出。
+
+原版 0.2.6/0.2.7 的更新客户端收到失败响应后会终止安装器，因而安装器窗口原有的导出按钮随之消失。这些已发布客户端不能新增按钮；新版安装器对协议 1 的失败先生成 ZIP、调用 Finder 显示，再把包含文件位置的错误返回旧客户端。初始化失败也能生成最小错误报告；导出自身失败时保留原错误并说明原因。协议 2 使用主应用的导出入口，不自动导出。
+
+新增回归先确认失败，再实现导出：前端缺少导出方法的三项失败、Rust 三项导出行为失败、Swift 新的失败响应接口尚不存在。完成后实际结果：
+
+| 命令 / 验收 | 结果 |
+|---|---|
+| `node --check frontend/app.js`、`node --check frontend/updater.js` | 通过 |
+| `node --test scripts/test-*.cjs` | 264 通过，0 失败 |
+| `python3 scripts/test-update-manifest.py` | 4 通过，0 失败 |
+| `python3 scripts/test-release-plan.py` | 12 通过，0 失败 |
+| `python3 scripts/test-publish-release.py` | 8 通过，0 失败 |
+| `python3 scripts/test-update-artifacts.py` | 4 通过，0 失败 |
+| `(cd src-tauri && cargo test --locked --offline --lib)` | 73 通过，0 失败 |
+| `bash scripts/test-macos-installer.sh` | 91 通过，0 失败；含 0.2.6/0.2.7 原格式记录及失败导出顺序 |
+| `(cd src-tauri && cargo build --locked --offline)` | 通过 |
+| 隔离源副本中 `cargo tauri dev --no-watch`，独立 identifier、测试库及启动报告 | 构建并运行，报告 `ready`，结束后退出 |
+| `(cd src-tauri && CARGO_NET_OFFLINE=true cargo tauri build --bundles app --target aarch64-apple-darwin)` | 通过 |
+| `bash scripts/build-macos-installer.sh <App> <隔离根目录>/production-final/music-manager_0.2.8_aarch64.dmg` | App/安装器签名、DMG 完整性、兼容元数据校验通过 |
+| `node frontend/.preview/build-preview.cjs frontend/index.html frontend/preview.html`，本机 HTTP 服务及 `shot.mjs` | 1440×900 和 900×800 下模拟交接失败、点击导出、保留原错误；页面异常及 console error 为 0，截图已读取 |
+
+隔离根目录：`/private/tmp/music-manager-desktop-diagnostics-20261104`。`build-fixture.py` 从 `v0.2.6` 标签构建原客户端，从当前代码构建候选 0.2.8，使用独立 identifier、本机临时签名更新源、测试 SQLite 和生成的 WAV。额外前端测试驱动调用真实更新 IPC，没有替换下载、验签、旧客户端交接或安装器实现；不把它描述为人工点击原生确认框。
+
+实际通过两条路径：
+
+- 故意放入损坏的安装记录：旧客户端收到失败，继续运行；安装器被旧客户端结束前 ZIP 已生成，错误中包含准确 ZIP 位置；ZIP 内有原错误，未包含数据库/设置/音频，测试数据一致。
+- 改回有效的 0.2.6 已完成旧记录并重试：真实签名包完成交接、迁移和启动，最终 `completed` / `ready` / `cleanupPending=false`；旧 App 已清理，旧记录按原字节归档。逐表业务数据、位置配置和 WAV 摘要一致，排除正常启动可变化的书签、音乐更新时间及应用版本元数据。新版真实 `export_update_diagnostics` IPC 生成 ZIP 并检查内容通过。
+
+验收准备中先发现测试曲目使用“专辑名跟随文件夹”，启动时专辑名会正常变化；改为手动专辑来源后保持原有数据断言。随后修正测试驱动未及时回收已退出子进程、导致安装器仍观察到 PID 的问题。两次未完成尝试均保留独立日志，未放宽产品判断或数据断言。
+
+证据：隔离根目录下 `evidence/result.json`、`legacy-failure.json`、`before.json`、`after-failure.json`、`after.json`、`native-diagnostics.zip`、`native-acceptance.log`，以及 `diagnostics-preview-final.png`。本轮原生鼠标操作、保存对话框和 Finder 窗口没有人工视觉验收；已验证真实应用及文件结果。真实系统目录提权、跨账户与 Intel 实机仍未实测。正式配置、音乐库与音频未读写；修复未提交、未发版。
+
+验收后已停止测试 App、安装器、开发模式进程与两个本地 HTTP 服务，按归属清单清理测试 App、下载包和源副本；保留上述证据与 `production-final/music-manager_0.2.8_aarch64.dmg` 本地候选。
+
+## 2026-11-04：修复 0.2.7 个人安装记录阻断升级
+
+本机安装器日志确认：旧 `latest.json` 是个人“应用程序”目录内已完成的 0.2.7 安装事务；0.2.8 改用系统目标时，初始化调用 `archiveReceipt()`，误将个人路径记录交给系统状态写入接口，触发“系统事务记录无效”，界面显示“更新记录无法安全读取”。失败发生在应用替换前。
+
+修复只在加载旧 Logs 记录、且该记录已结束并指向另一位置时生效：验证原路径，在用户 Logs 的 `transactions` 下持久化原始 JSON，成功后移除旧活动记录，再开始新目标事务。系统专用状态中的异地记录仍拒绝；归档失败保留活动记录；未完成事务仍阻止迁移。没有改数据库 schema、版本号或发布资产。
+
+先加入旧版字段结构的回归，修复前实际失败：`personal receipt was incorrectly archived into system state`。修复后新增五项覆盖三种结束状态、专用状态隔离、归档失败保留证据，包含真实临时文件迁移与启动子进程。
+
+本轮实际执行（均为本地验证，未提交或发布）：
+
+| 命令 / 验收 | 结果 |
+|---|---|
+| `node --check frontend/app.js`、`node --check frontend/updater.js` | 通过 |
+| `node --test scripts/test-*.cjs` | 260 通过，0 失败 |
+| `python3 scripts/test-update-manifest.py` | 4 通过，0 失败 |
+| `python3 scripts/test-release-plan.py` | 12 通过，0 失败 |
+| `python3 scripts/test-publish-release.py` | 8 通过，0 失败 |
+| `python3 scripts/test-update-artifacts.py` | 4 通过，0 失败 |
+| `(cd src-tauri && cargo test --locked --offline --lib)` | 70 通过，0 失败 |
+| `bash scripts/test-macos-installer.sh` | 84 通过，0 失败 |
+| `(cd src-tauri && CARGO_NET_OFFLINE=true cargo tauri build --bundles app --target aarch64-apple-darwin)` | App 构建、ad-hoc 签名通过 |
+| `bash scripts/build-macos-installer.sh <arm64 App> <隔离根目录>/production-package/music-manager_0.2.8_aarch64.dmg` | DMG、嵌套签名、hdiutil 校验及兼容元数据通过 |
+| 独立源副本中 `cargo tauri dev --no-watch`，指定隔离配置、共享编译目录和启动报告 | 构建并启动，报告 `ready`；结束后退出进程 |
+| `git diff --check` | 通过 |
+
+打包首次受执行沙箱限制报“设备未配置”，授权扩大构建执行范围后通过。另一次候选 DMG 使用非标准文件名，包身份校验拒绝；改用标准版本/架构命名重新完整构建通过，未放宽校验。开发模式最初在受限环境未生成启动报告，扩大执行范围后实际启动成功。
+
+原生验收根目录：`/private/tmp/music-manager-desktop-receipt-20261104-fix`；独立 identifier：`com.musicmanager.acceptance.5c2b05ad5f52`。使用 `build-fixture.py` 从 `v0.2.7` 标签及当前代码构建旧、新客户端，预置原格式已完成旧记录。验收安装器仅把目标重定向到隔离的 `SystemApplications`，旧客户端使用隔离的 `Applications`，日志、缓存和 SQLite 都独立。测试签名及下载服务仅用于本机验收。
+
+通过真实 0.2.7 窗口完成检查、下载、签名校验、确认更新；0.2.8 窗口实际显示原测试曲目，截图已读取。新事务为 `completed` / `ready` / `cleanupPending=false`，旧位置 App 已清理，旧记录归档与原字节一致。测试库逐表业务记录、设置和 WAV SHA-256 一致；正常启动可变化的 `music.file_bookmark`、`music.updated_at` 和 `app_metadata.app_version` 排除在逐表比对之外。
+
+证据保存在隔离根目录的 `evidence/upgrade-result.json`、`before.json`、`after.json`、`legacy-receipt-before.json`、`dev-startup.json` 和安装日志。测试进程、HTTP 服务已退出，测试 App、下载包及源副本按归属清单清理；保留本地生产配置修复 DMG，不自动安装或发布。
+
+限制：未执行真实 `/Applications` 管理员授权和跨账户安装，未验证 Intel 实机、不同 macOS 或实体移动盘。本次没有更改正式应用、正式安装记录、音乐库或音频；本地修复不会自动改变用户已下载的发布包。
+
 基线：main `cb2a063`。应用版本仍为 0.2.7，数据库 schema 仍为 3。本次不操作正式配置、音乐库、音频或开发者历史安装。
 
 ## 用户行为

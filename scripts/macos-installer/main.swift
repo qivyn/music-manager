@@ -50,6 +50,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     var busy = false
     var updateRequest: InAppUpdateRequest?
     var packageVersion:NSTextField!
+    var diagnosticsRoot: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -106,6 +107,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             logRoot = testRoot.appendingPathComponent("logs")
             identifier = "com.musicmanager.installertest"
             #endif
+            diagnosticsRoot = logRoot
             #if INSTALLER_UI_TESTS
             let allowedDestinations = [destination]
             #else
@@ -163,7 +165,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                 status.stringValue = "正在准备目标安装，当前应用保持运行…"
                 perform(completion: { NSApp.terminate(nil) }) {
                     do {try installer.validateInAppUpdate(version: request.version);try installer.prepare();try request.respond()}
-                    catch {try? request.respond(error:error.localizedDescription);throw error}
+                    catch {self.respondToUpdateFailure(error);throw error}
                     try request.waitForParentExit()
                     try installer.install()
                     _ = try installer.launch()
@@ -174,7 +176,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                 }
             }
         } catch {
-            try? updateRequest?.respond(error: error.localizedDescription)
+            respondToUpdateFailure(error)
             show(error)
         }
         refreshButtons()
@@ -207,6 +209,15 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         if let dir = installer?.runDirectory {
             try? error.localizedDescription.write(to: dir.appendingPathComponent("error.txt"), atomically: true, encoding: .utf8)
         }
+    }
+    func respondToUpdateFailure(_ error: Error) {
+        guard let request = updateRequest, let root = diagnosticsRoot else { return }
+        try? request.respondToFailure(error.localizedDescription, export: {
+            try exportUpdateFailure(error.localizedDescription, installer: self.installer, logRoot: root)
+        }, reveal: { url in
+            let reveal = { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            if Thread.isMainThread { reveal() } else { DispatchQueue.main.sync(execute: reveal) }
+        })
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if busy { NSSound.beep() }

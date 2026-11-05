@@ -4,6 +4,15 @@
 fn app_context() -> tauri::Context<tauri::Wry> { music_manager_lib::app_context() }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--local-update-test") {
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        music_manager_lib::local_update_test::launch(std::env::args_os().skip(2));
+        #[cfg(not(all(target_os = "macos", debug_assertions)))]
+        {
+            eprintln!("本地更新测试仅支持 macOS 开发构建，请从项目源码运行 cargo tauri dev。");
+            std::process::exit(2);
+        }
+    }
     #[cfg(target_os="macos")]
     if std::env::args().nth(1).as_deref()==Some("--installer-update-info") {
         let context=app_context();

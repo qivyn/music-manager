@@ -55,6 +55,7 @@ jobs:
           python3 scripts/test-release-plan.py 2>&1 | tee test-results/release-plan.log
           python3 scripts/test-publish-release.py 2>&1 | tee test-results/publish-release.log
           python3 scripts/test-update-artifacts.py 2>&1 | tee test-results/update-artifacts.log
+          python3 scripts/test-local-update.py 2>&1 | tee test-results/local-update.log
 
       - name: Preserve test evidence
         if: always()
