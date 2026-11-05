@@ -521,8 +521,8 @@ test('restart asks once with only confirm and cancel', async () => {
     a.context.window.__TAURI__.dialog.ask = async (message, options) => { prompts.push({ message, options }); return true; };
     const release = await a.run('prepareApplicationUpdate()');
     assert.equal(prompts.length, 1);
-    assert.equal(prompts[0].options.okLabel, '退出并安装');
-    assert.equal(prompts[0].options.cancelLabel, '取消');
+    assert.equal(prompts[0].options.okLabel, '现在重启');
+    assert.equal(prompts[0].options.cancelLabel, '稍后');
     assert.match(prompts[0].message, /未保存的输入不会保留/);
     assert.doesNotMatch(prompts[0].message, /管理员密码/);
     assert.equal(typeof release, 'function');

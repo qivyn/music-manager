@@ -8062,3 +8062,38 @@ body.view-home .top-nav .nav-count { border: 0; background: none; color: var(--h
     #updateModal .update-notes { max-height: 130px; }
 }
 #updateModal [hidden] { display: none !important; }
+
+/* Update discovery: a quiet header pill and a dot on the settings entry, never a modal. */
+.update-notice {
+    box-sizing: border-box;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 13px;
+    border: 1px solid #56514a;
+    border-radius: 999px;
+    background: transparent;
+    color: #e8e1d5;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.update-notice::before { content: ""; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--primary); }
+.update-notice:hover { color: #fff; background: #292825; }
+.update-notice:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.update-notice[hidden] { display: none; }
+#settingsToggleBtn { position: relative; }
+#settingsToggleBtn[data-update-available="true"]::after {
+    content: "";
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+}
+.settings-action .update-menu-badge { color: var(--primary-strong); font-size: 11px; font-weight: 600; }
+.settings-action .update-menu-badge[hidden] { display: none; }

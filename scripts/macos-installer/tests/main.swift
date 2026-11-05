@@ -261,17 +261,16 @@ do {
         try check(try AppInfo.read(f.destination).version == "0.2.6", "resumed installer did not install")
         try f.verifyLibrary()
     }
-    try test("a lock conflict fails before creating logs and names the holding process") {
+    try test("a lock conflict fails before creating logs and explains it in plain language") {
         let f = try Fixture()
         let before = try fm.contentsOfDirectory(atPath: f.logs.path).count
         try fails("second installer") { _ = try Installer(source: f.source, destination: f.destination, logRoot: f.logs, io: f.io, systemChecks: false) }
         try check(try fm.contentsOfDirectory(atPath: f.logs.path).count == before, "failed installer left a run directory")
         try check(f.io.operations.isEmpty, "failed installer ran an operation")
-        let sleeper = Process(); sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep"); sleeper.arguments = ["5"]
-        try sleeper.run(); defer { sleeper.terminate() }
-        let message = busyInstallerMessage(recorded: sleeper.processIdentifier, bundleIdentifier: "com.musicmanager.installertest")
-        try check(message.contains("进程 \(sleeper.processIdentifier)") && message.contains("⌘Q"), "message does not identify the holder")
-        try check(!busyInstallerMessage(recorded: getpid(), bundleIdentifier: "com.musicmanager.installertest").contains("进程"), "message named the asking process")
+        let message = try String(contentsOf: f.logs.appendingPathComponent("installer.lock"), encoding: .utf8)
+        try check(message.trimmingCharacters(in: .whitespacesAndNewlines) == String(getpid()), "holder PID not recorded for diagnostics")
+        try check(busyInstallerMessage.contains("红色按钮") && !busyInstallerMessage.contains("进程") && !busyInstallerMessage.contains("⌘Q"), "message is not plain language")
+        try check(requestOtherInstallersQuit("com.musicmanager.installertest.none").isEmpty, "closed an unrelated application")
     }
     try test("log rotation preserves unknown directories and removes only owned expired runs") {
         let f=try Fixture();let oldRun=f.engine!.runDirectory

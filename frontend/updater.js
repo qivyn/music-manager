@@ -2,7 +2,7 @@
 (function (root) {
     function updatePresentation(state) {
         if (state.errorAction) {
-            const signature = /签名|signature|公钥|摘要/i.test(state.message);
+            const signature = signatureError(state.message);
             const title = signature ? "更新包未通过验证" : ({check:"暂时无法检查更新",download:"下载未完成",install:"更新未完成",status:"暂时无法读取更新状态",installation:"此位置暂不支持更新"}[state.errorAction] || "更新暂时遇到问题");
             const message = signature ? "请重新下载更新。当前安装的应用未被替换。"
                 : state.errorAction === "installation" ? state.message
@@ -10,16 +10,43 @@
                 : "你可以重试，或导出诊断文件交给管理员或开发者排查。";
             return { title, message, tone: "warning", symbol: "!" };
         }
-        const titles = {idle:"检查是否有可用更新",checking:"正在检查更新",available:"发现新版本",downloading:"正在下载更新",verifying:"正在验证更新包",ready:"更新已准备好",preparing:"正在准备安装",restarting:"正在重启更新",latest:"已是最新版本"};
+        const titles = {installed:"更新完成",idle:"检查是否有可用更新",checking:"正在检查更新",available:"发现新版本",downloading:"正在下载更新",verifying:"正在验证更新包",ready:"更新已准备好",preparing:"正在准备安装",restarting:"正在重启更新",latest:"已是最新版本"};
         return {title:titles[state.phase] || "软件更新",message:state.message,
-            tone:["ready","latest"].includes(state.phase)?"success":"neutral",
-            symbol:["ready","latest"].includes(state.phase)?"✓":"↓"};
+            tone:["ready","latest","installed"].includes(state.phase)?"success":"neutral",
+            symbol:["ready","latest","installed"].includes(state.phase)?"✓":"↓"};
+    }
+    const signatureError = message => /签名|signature|公钥|摘要/i.test(message || "");
+    const installerConflict = state => state.errorCode === "CONFLICT" || /安装与更新声场档案”窗口/.test(state.message || "");
+    // The primary button always offers the next useful step, never a repeat of what just failed.
+    function updateActions(state) {
+        const none = { label: "", intent: "none" };
+        if (state.errorAction === "check") return { primary: { label: "重试检查", intent: "check" }, secondary: none };
+        if (state.errorAction === "download") return { primary: { label: signatureError(state.message) ? "重新下载" : "重试下载", intent: "update" }, secondary: none };
+        if (state.errorAction === "install") {
+            if (installerConflict(state)) return { primary: { label: "已关闭，重试", intent: "restart" }, secondary: none };
+            return { primary: { label: "导出诊断信息", intent: "export" }, secondary: { label: "重试更新", intent: "restart" } };
+        }
+        if (["preparing", "restarting"].includes(state.phase)) return { primary: { label: "正在准备…", intent: "none" }, secondary: none };
+        if (["downloading", "verifying"].includes(state.phase)) return { primary: { label: "正在下载…", intent: "none" }, secondary: none };
+        if (state.phase === "ready") return { primary: { label: "重启并安装", intent: "restart" }, secondary: none };
+        if (state.phase === "available") return { primary: { label: state.version ? `更新到 ${state.version}` : "下载更新", intent: "update" }, secondary: none };
+        if (state.phase === "checking") return { primary: { label: "正在检查…", intent: "none" }, secondary: none };
+        return { primary: { label: "检查更新", intent: "check" }, secondary: none };
+    }
+    function compareVersions(a, b) {
+        const left = String(a).split(".").map(Number), right = String(b).split(".").map(Number);
+        for (let i = 0; i < Math.max(left.length, right.length); i++) {
+            const diff = (left[i] || 0) - (right[i] || 0);
+            if (diff) return diff < 0 ? -1 : 1;
+        }
+        return 0;
     }
     function createUpdaterController({ invoke, listen, onChange, prepareRestart, chooseDiagnosticsPath, revealDiagnostics }) {
-        const state = { phase: "idle", busy: false, version: "", currentVersion: "", notes: "", message: "检查并安装声场档案的最新版本。", errorAction: "", downloaded: 0, total: null, transactionId: null, cleanupPending: false,
+        const state = { phase: "idle", busy: false, version: "", currentVersion: "", notes: "", message: "检查并安装声场档案的最新版本。", errorAction: "", errorCode: "", downloaded: 0, total: null, transactionId: null, cleanupPending: false,
             diagnosticsMessage: "", diagnosticsPath: "", diagnosticsError: "", diagnosticsRevealError: "", diagnosticsExporting: false, diagnosticsRevealing: false };
         const notify = () => onChange({ ...state });
         const errorMessage = error => error?.message || String(error);
+        const fail = (error, action) => { state.message = errorMessage(error); state.errorAction = action; state.errorCode = error?.errorCode || ""; };
         const listener = listen("app-update-progress", event => {
             if (!state.busy || !["downloading", "verifying"].includes(state.phase)) return;
             const progress = event.payload;
@@ -30,9 +57,10 @@
             state.message = progress.phase === "verifying" ? "下载完成，正在验证更新包…" : "正在下载更新，可以继续使用音乐库。";
             notify();
         });
-        async function check() {
+        // A silent check runs in the background at startup: it never shows an error.
+        async function check({ silent = false } = {}) {
             if (state.busy) return;
-            Object.assign(state, { phase: "checking", busy: true, message: "正在获取可用版本，请稍候。", notes: "", version: "", errorAction: "" });
+            Object.assign(state, { phase: "checking", busy: true, message: "正在获取可用版本，请稍候。", notes: "", version: "", errorAction: "", errorCode: "" });
             notify();
             try {
                 const result = await invoke("check_app_update");
@@ -42,25 +70,34 @@
                     message: result.version ? `发现新版本 ${result.version}` : "当前已是最新版本。"
                 });
             } catch (error) {
-                state.phase = "idle"; state.message = errorMessage(error); state.errorAction = "check";
+                state.phase = "idle";
+                if (silent) state.message = "检查并安装声场档案的最新版本。"; else fail(error, "check");
             } finally { state.busy = false; notify(); }
+        }
+        function showInstalled({ version, notes, updated = true }) {
+            Object.assign(state, { phase: "installed", version: "", currentVersion: version, notes: notes || "", errorAction: "", errorCode: "",
+                message: `${updated ? `已更新到 ${version}` : `声场档案 ${version} 已安装`}。下面是这个版本的更新内容。` });
+            notify();
         }
         async function restore() {
             if (state.busy) return;
             state.busy = true; notify();
             try {
                 const saved = await invoke("get_update_status");
-                if (saved) Object.assign(state, saved, { version: saved.targetVersion || "", busy: true, errorAction: saved.errorCode ? "status" : "" });
-            } catch (error) { state.message = errorMessage(error); state.errorAction = "status"; }
+                // A background check may already have found a newer version than anything downloaded.
+                const found = ["available", "latest", "installed"].includes(state.phase) && saved?.phase === "idle"
+                    ? { phase: state.phase, version: state.version, notes: state.notes, message: state.message } : null;
+                if (saved) Object.assign(state, saved, { version: saved.targetVersion || "", busy: true, errorAction: saved.errorCode ? "status" : "", errorCode: saved.errorCode || "" }, found || {});
+            } catch (error) { fail(error, "status"); }
             finally { state.busy = false; notify(); }
         }
         async function cancel() {
             try { await invoke("cancel_app_update"); }
-            catch (error) { state.message = errorMessage(error); state.errorAction = "status"; notify(); }
+            catch (error) { fail(error, "status"); notify(); }
         }
         async function download() {
             if (state.busy || state.phase !== "available") return;
-            Object.assign(state, { phase: "downloading", busy: true, downloaded: 0, total: null, transactionId: null, message: "正在下载更新，可以继续使用音乐库。", errorAction: "" });
+            Object.assign(state, { phase: "downloading", busy: true, downloaded: 0, total: null, transactionId: null, message: "正在下载更新，可以继续使用音乐库。", errorAction: "", errorCode: "" });
             notify();
             try {
                 await listener;
@@ -68,13 +105,13 @@
                 state.phase = "ready";
                 state.message = "更新包已下载并通过签名校验，点击“重启并更新”安装。";
             } catch (error) {
-                state.phase = "available"; state.message = errorMessage(error); state.errorAction = "download";
+                state.phase = "available"; fail(error, "download");
             } finally { state.busy = false; notify(); }
         }
         async function restart() {
             if (state.busy || state.phase !== "ready") return;
             // The confirmation dialog comes first; only then does the panel report waiting.
-            state.busy = true; state.errorAction = ""; notify();
+            state.busy = true; state.errorAction = ""; state.errorCode = ""; notify();
             let release;
             try {
                 release = await prepareRestart(() => { state.message = "正在等待当前操作完成…"; notify(); });
@@ -83,7 +120,7 @@
                 await invoke("restart_for_app_update");
                 state.message = "更新程序已就绪，正在重启…";
             } catch (error) {
-                state.phase = "ready"; state.message = errorMessage(error); state.errorAction = "install";
+                state.phase = "ready"; fail(error, "install");
             } finally {
                 if (release) release();
                 state.busy = false; notify();
@@ -124,14 +161,14 @@
             await revealSavedDiagnostics();
         }
         function reportError(error, action = "status") {
-            state.message = errorMessage(error); state.errorAction = action; notify();
+            fail(error, action); notify();
         }
         notify();
         // Event permission failures are surfaced on download, without an unhandled rejection.
         listener.catch(() => {});
-        return { state, check, download, restart, restore, cancel, exportDiagnostics, showDiagnostics, reportError };
+        return { state, check, download, restart, restore, cancel, exportDiagnostics, showDiagnostics, reportError, showInstalled };
     }
-    if (typeof module !== "undefined" && module.exports) module.exports = { createUpdaterController, updatePresentation };
+    if (typeof module !== "undefined" && module.exports) module.exports = { createUpdaterController, updatePresentation, updateActions, compareVersions };
     if (!root.document) return;
     const modal = document.getElementById("updateModal");
     const open = document.getElementById("checkUpdateBtn");
@@ -165,7 +202,11 @@
     const diagnosticDetails = document.getElementById("updateDiagnosticsDetails");
     const diagnosticPath = document.getElementById("updateDiagnosticsPath");
     const diagnosticError = document.getElementById("updateDiagnosticsError");
+    const notice = document.getElementById("updateNoticeBtn");
+    const settingsToggle = document.getElementById("settingsToggleBtn");
+    const menuBadge = document.getElementById("checkUpdateBadge");
     let installation = null;
+    let actions = updateActions({ phase: "idle" });
     const api = root.__TAURI__;
     if (!api) { open.disabled = true; return; }
     const controller = createUpdaterController({
@@ -192,14 +233,15 @@
             version.textContent = state.currentVersion || "读取中…";
             targetVersion.hidden = !state.version;
             targetVersion.textContent = state.version ? `可更新至 ${state.version}` : "";
-            action.disabled = state.busy || state.phase === "restarting" || installation?.canUpdate === false;
+            actions = updateActions(state);
+            action.disabled = state.busy || actions.primary.intent === "none" || installation?.canUpdate === false;
             if (cancel) {cancel.hidden = !["downloading", "verifying", "preparing"].includes(state.phase); cancel.textContent = state.phase === "preparing" ? "取消准备" : "取消下载"; cancel.disabled = !state.busy;}
             if (cleanup) cleanup.hidden = !state.cleanupPending;
-            action.textContent = ["preparing", "restarting"].includes(state.phase) ? "正在准备…"
-                : state.phase === "ready" ? "重启并更新"
-                : ["available", "downloading", "verifying"].includes(state.phase) ? "下载更新" : state.errorAction === "check" ? "重试检查" : "检查更新";
-            recheck.hidden = !["ready", "available"].includes(state.phase);
+            action.textContent = actions.primary.label;
+            recheck.hidden = actions.secondary.intent === "none";
+            recheck.textContent = actions.secondary.label;
             recheck.disabled = state.busy;
+            if (state.phase === "available" && state.version) markAvailable(state.version);
             diagnostics.disabled = state.busy || state.diagnosticsRevealing;
             diagnostics.textContent = state.diagnosticsExporting ? "正在导出…" : state.diagnosticsPath ? "重新导出" : "导出诊断信息";
             diagnosticCard.dataset.saved = String(Boolean(state.diagnosticsPath));
@@ -255,7 +297,7 @@
         try {await api.core.invoke("retry_update_cleanup"); await controller.restore();}
         catch(error) {controller.reportError(error);}
     });
-    open.addEventListener("click", async () => {
+    async function openPanel({ check = true } = {}) {
         modal.classList.remove("hidden");
         try {
             installation = await api.core.invoke("get_installation_status");
@@ -266,19 +308,70 @@
             if (reveal) reveal.disabled = !installation?.canUpdate;
             await controller.restore();
             if (installation?.canUpdate === false) {controller.reportError(installation.message, "installation"); action.disabled = true; return;}
-            if (controller.state.phase === "idle") await controller.check();
+            if (check && controller.state.phase === "idle") await controller.check();
         } catch (error) {controller.reportError(error);}
-    });
+    }
+    open.addEventListener("click", () => openPanel());
     close.addEventListener("click", () => modal.classList.add("hidden"));
     document.addEventListener("keydown", event => {
         if (event.key === "Escape" && !modal.classList.contains("hidden")) {
             modal.classList.add("hidden");
         }
     });
-    recheck.addEventListener("click", () => controller.check());
-    action.addEventListener("click", () => {
-        if (controller.state.phase === "ready") return controller.restart();
-        if (controller.state.phase === "available") return controller.download();
-        return controller.check();
+    async function run(intent) {
+        if (intent === "check") return controller.check();
+        if (intent === "restart") return controller.restart();
+        if (intent === "export") return controller.exportDiagnostics();
+        if (intent === "update") {
+            // One click downloads and then asks once whether to restart now or later.
+            await controller.download();
+            if (controller.state.phase === "ready" && !controller.state.errorAction) return controller.restart();
+        }
+    }
+    recheck.addEventListener("click", () => run(actions.secondary.intent));
+    action.addEventListener("click", () => run(actions.primary.intent));
+
+    // Background discovery: at most one silent check a day, shown as a quiet badge, never an interruption.
+    const STORAGE = { lastRun: "musicManager.update.lastRunVersion", checkedAt: "musicManager.update.checkedAt", available: "musicManager.update.availableVersion" };
+    const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
+    const write = (key, value) => { try { value == null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch {} };
+    let noticeIntent = null;
+    function showNotice(text, intent) {
+        if (!notice) return;
+        notice.textContent = text; notice.hidden = false; noticeIntent = intent;
+    }
+    function markAvailable(next) {
+        write(STORAGE.available, next);
+        if (settingsToggle) settingsToggle.dataset.updateAvailable = "true";
+        if (menuBadge) { menuBadge.hidden = false; menuBadge.textContent = `新版本 ${next}`; }
+        if (noticeIntent !== "installed") showNotice(`有新版本 ${next}`, "available");
+    }
+    if (notice) notice.addEventListener("click", () => {
+        if (noticeIntent === "installed") { notice.hidden = true; noticeIntent = null; return openPanel({ check: false }); }
+        return openPanel();
     });
+    api.core.invoke("get_update_welcome").then(welcome => {
+        const current = welcome.version, previous = read(STORAGE.lastRun);
+        write(STORAGE.lastRun, current);
+        const known = read(STORAGE.available);
+        if (known && compareVersions(known, current) <= 0) write(STORAGE.available, null);
+        else if (known) markAvailable(known);
+        // The installer passes the replaced version; older clients never recorded their own.
+        const before = previous || (welcome.launchedByInstaller ? welcome.previousVersion : null);
+        const updated = before && compareVersions(before, current) < 0;
+        if (updated || (!previous && welcome.launchedByInstaller)) {
+            controller.showInstalled({ version: current, notes: welcome.notes, updated: Boolean(updated) });
+            showNotice(updated ? `已更新到 ${current} · 查看更新内容` : `声场档案 ${current} 已安装 · 查看更新内容`, "installed");
+            setTimeout(() => { if (noticeIntent === "installed") { notice.hidden = true; noticeIntent = null; } }, 30000);
+        }
+        const last = Number(read(STORAGE.checkedAt) || 0);
+        if (Date.now() - last < 24 * 3600 * 1000) return;
+        setTimeout(async () => {
+            if (!modal.classList.contains("hidden")) return;
+            await controller.check({ silent: true });
+            if (!controller.state.errorAction && controller.state.phase !== "idle") write(STORAGE.checkedAt, String(Date.now()));
+            // Keep the welcome notes available until the user has seen them.
+            if (noticeIntent === "installed" && controller.state.phase === "latest") controller.showInstalled({ version: current, notes: welcome.notes, updated: Boolean(updated) });
+        }, 5000);
+    }).catch(() => {});
 })(typeof window === "undefined" ? globalThis : window);

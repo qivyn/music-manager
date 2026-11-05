@@ -45,13 +45,15 @@ private func otherInstallerProcesses(_ bundleIdentifier: String) -> [NSRunningAp
     NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
         .filter { !$0.isTerminated && $0.processIdentifier != getpid() }
 }
-/// Names the window holding the installer lock, so the user knows which one to finish or quit.
-func busyInstallerMessage(recorded: Int32?, bundleIdentifier: String) -> String {
-    var pids: [Int32] = []
-    if let pid = recorded, pid > 1, pid != getpid(), Darwin.kill(pid, 0) == 0 || errno == EPERM { pids.append(pid) }
-    for app in otherInstallerProcesses(bundleIdentifier) where !pids.contains(app.processIdentifier) { pids.append(app.processIdentifier) }
-    let process = pids.isEmpty ? "" : "（进程 \(pids.map(String.init).joined(separator: "、"))）"
-    return "另一个“安装与更新声场档案”窗口正在运行\(process)。请切换到那个窗口：正在安装时请等待完成；已经空闲时按 ⌘Q 退出，然后重试。当前应用未被修改。"
+/// Plain-language guidance for people who do not know what a process is.
+/// Process IDs go to the installer log and diagnostics instead.
+let busyInstallerMessage = "另一个“安装与更新声场档案”窗口正在使用。如果它正在安装，请等它完成；否则请关闭那个窗口（点击窗口左上角的红色按钮），然后重试。当前应用未被修改。"
+/// Asks other installer windows to quit, exactly as if the user had closed them.
+/// A window in the middle of an operation refuses, so no work is interrupted.
+func requestOtherInstallersQuit(_ bundleIdentifier: String) -> [Int32] {
+    let others = otherInstallerProcesses(bundleIdentifier)
+    for app in others { _ = app.terminate() }
+    return others.map(\.processIdentifier)
 }
 func installerProcessSummary(_ bundleIdentifier: String) -> String {
     let lines = otherInstallerProcesses(bundleIdentifier).map { app in
@@ -308,6 +310,7 @@ final class Installer {
     private var targetLocked=false
     private var appLog: FileHandle?
     private var log: (String) -> Void = { _ in }
+    private(set) var closedInstallers: [Int32] = []
     private let systemChecks: Bool
     private let identifier: String
 
@@ -337,8 +340,9 @@ final class Installer {
         try InstallationLocation.rejectLinks(logRoot)
         try fm.createDirectory(at: logRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // Check for another installer before creating logs or requesting any authorization.
-        try acquireSessionLock()
+        try acquireSessionLock(closingIdleWindows: true)
         try fm.createDirectory(at: runDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if !closedInstallers.isEmpty { append("已请求空闲的安装窗口退出：\(closedInstallers.map(String.init).joined(separator: "、"))") }
         try durableWrite(JSONSerialization.data(withJSONObject:["identifier":identifier,"run":runDirectory.lastPathComponent,"logRoot":logRoot.path]),to:runDirectory.appendingPathComponent("run-owner.json"))
         try InstallationLocation.rejectLinks(destination)
         try InstallationLocation.rejectLinks(self.stateRoot)
@@ -355,18 +359,28 @@ final class Installer {
         identifier == "com.musicmanager.app" ? "com.musicmanager.installer" : identifier + ".installer"
     }
     // Held only while an operation runs, so an idle installer window never blocks an update.
-    private func acquireSessionLock() throws {
+    private func acquireSessionLock(closingIdleWindows: Bool = false) throws {
         if lockFD >= 0 { return }
         let path = logRoot.appendingPathComponent("installer.lock")
         try InstallationLocation.rejectLinks(path)
         let fd = Darwin.open(path.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw InstallError("无法创建安装锁，请检查目录权限：\(logRoot.path)") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            Darwin.close(fd)
-            let recorded = (try? String(contentsOf: path, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            throw InstallError(busyInstallerMessage(recorded: recorded, bundleIdentifier: installerBundleIdentifier))
+        var locked = flock(fd, LOCK_EX | LOCK_NB) == 0
+        if !locked && closingIdleWindows {
+            // Released installers before 0.2.10 keep the lock for as long as their window is open.
+            // Close idle windows for the user instead of asking them to find and quit one.
+            closedInstallers = requestOtherInstallersQuit(installerBundleIdentifier)
+            let deadline = Date().addingTimeInterval(closedInstallers.isEmpty ? 0 : 8)
+            while !locked && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.2)
+                locked = flock(fd, LOCK_EX | LOCK_NB) == 0
+            }
         }
-        // Releases before 0.2.10 lock without recording a PID; later holders identify themselves.
+        guard locked else {
+            Darwin.close(fd)
+            throw InstallError(busyInstallerMessage)
+        }
+        // The holder PID is for diagnostics; the user-facing message stays plain.
         let pid = Data("\(getpid())\n".utf8)
         _ = ftruncate(fd, 0)
         _ = pid.withUnsafeBytes { Darwin.pwrite(fd, $0.baseAddress, pid.count, 0) }
@@ -771,6 +785,8 @@ final class Installer {
         environment["MUSIC_MANAGER_STARTUP_REPORT"] = status.path
         environment["MUSIC_MANAGER_STARTUP_PATH_CHECK"] = "1"
         environment["MUSIC_MANAGER_STARTUP_SESSION"] = token
+        // Lets the new version say "updated from" rather than "installed" on its first launch.
+        if let previous = r.previousVersion { environment["MUSIC_MANAGER_PREVIOUS_VERSION"] = previous }
         task.environment = environment
         let output = attempt.appendingPathComponent("application.log")
         appLog?.closeFile()

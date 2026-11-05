@@ -397,3 +397,9 @@ Tauri CLI 2.11.4 使用按系统、架构和 CLI 版本划分的独立缓存，�
 补充：0.2.8/0.2.9 将从线上撤回，主应用不再读取 `/Library/Application Support/com.musicmanager.installer/system`；本地更新测试移除 `SystemApplications` 迁移目录。
 
 原生验收（本轮执行）：`cargo tauri dev --no-watch -- -- --local-update-test --from-version 0.2.6`，隔离目录 `/private/tmp/music-manager-desktop-local-zvp0vyry`。0.2.6 测试 App 经应用内更新在原 `Applications` 中替换为当前源码构建（版本号仍为 0.2.9）；未启动提权执行器；新版以协议 2 回报 `ready`，事务 `completed`、`cleanupPending=false`，旧版备份与下载缓存已清理；0.2.6 的 Logs 记录归档到用户状态 `transactions`；测试库曲目、片段与标签保留。
+
+## 2026-11-05：0.2.11 更新交互
+
+后台每日静默检查、右上角提示与设置圆点；一键“更新到 x.y.z”后确认一次“现在重启 / 稍后”；应用内更新时安装器只显示进度，失败才显示恢复按钮，手动安装成功后自动关闭；新版首次启动提示“已更新到 x.y.z”并展示内嵌更新说明（安装器传递旧版本号）；失败时按错误类型给出主按钮；锁被旧安装窗口占用时请其退出，仍失败才用白话提示，进程号只进诊断。
+
+验证（本轮执行）：安装器 86 项、`cargo test --locked --lib` 77 项、`node --test scripts/test-*.cjs` 277 项通过；`test-release-plan.py`、`test-update-manifest.py`、`test-local-update.py` OK；预览截图检查了右上角提示与更新面板。原生验收 `--local-update-test`（0.2.11 → 0.2.12，隔离目录 `/private/tmp/music-manager-desktop-local-lf59ml2s`）：用测试替身模拟一直占锁的旧安装窗口，更新程序记录“已请求空闲的安装窗口退出”后替身退出，未出现系统授权框，未提权；新版原地替换并回报 `ready`，事务 `completed`、`cleanupPending=false`。未逐项观察的：安装进度窗口的按钮隐藏、首次启动提示的实际外观。

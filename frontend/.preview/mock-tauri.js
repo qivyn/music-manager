@@ -50,6 +50,7 @@
             case "export_update_diagnostics": return null;
             case "cancel_app_update": case "prepare_update_exit": case "abort_update_exit": case "retry_update_cleanup": case "show_installation_in_finder": return null;
             case "check_app_update": return { currentVersion: "本地预览", version: null };
+            case "get_update_welcome": return { version: "0.0.0", notes: "", launchedByInstaller: false };
             case "get_database_path": return "/Users/qi/Library/Application Support/com.musicmanager.app/library.db";
             case "sync_library_locations": return { updatedPaths: 0, updatedAlbums: 0 };
             case "list_music": return music;
