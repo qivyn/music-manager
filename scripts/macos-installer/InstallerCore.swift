@@ -86,6 +86,22 @@ struct InAppUpdateRequest {
         if let error = error { data["error"] = error }
         try JSONSerialization.data(withJSONObject: data).write(to: reply, options: .atomic)
     }
+    func respondToFailure(_ message: String, export: () throws -> URL,
+                          reveal: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }) throws {
+        var response = message
+        // Released protocol-1 clients kill this process on an error reply and
+        // have no export button. Finish exporting before they receive the error.
+        if protocolVersion == 1 {
+            do {
+                let archive = try export()
+                reveal(archive)
+                response += "\n诊断 ZIP 已保存并在 Finder 中显示：\(archive.path)\n请将该文件发给管理员或开发者。"
+            } catch {
+                response += "\n诊断信息未能自动导出：\(error.localizedDescription)"
+            }
+        }
+        try respond(error: response)
+    }
     var cancelled:Bool {FileManager.default.fileExists(atPath:reply.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("cancel-request").path)}
     func waitForParentExit(timeout: TimeInterval = 30, isRunning: (Int32) -> Bool = { Darwin.kill($0, 0) == 0 || errno == EPERM }) throws {
         let deadline = Date().addingTimeInterval(timeout)
@@ -322,13 +338,23 @@ final class Installer {
         }
         let legacy = logRoot.appendingPathComponent("latest.json")
         let current = self.stateRoot.appendingPathComponent("latest.json")
-        if let data = try? Data(contentsOf: fm.fileExists(atPath: current.path) ? current : legacy) {
+        let record = fm.fileExists(atPath: current.path) ? current : legacy
+        if let data = try? Data(contentsOf: record) {
             do {
                 receipt = try JSONDecoder().decode(InstallReceipt.self, from: data)
                 if let r = receipt, r.destination != destination.path, r.finished {
+                    // Only the old shared Logs record may describe another target.
+                    // Dedicated system state must always belong to this destination.
+                    guard record == legacy else { throw InstallError("更新记录与安装位置不一致，已停止操作。请导出诊断信息。") }
                     try validateReceipt(at: URL(fileURLWithPath: r.destination))
-                    try archiveReceipt()
-                    if fm.fileExists(atPath: current.path) { try fm.removeItem(at: current) }
+                    // Preserve v0.2.6/0.2.7 evidence in its original user scope.
+                    // The privileged state writer correctly rejects personal paths.
+                    let archive = logRoot.appendingPathComponent("transactions/\(r.session).json")
+                    try InstallationLocation.rejectLinks(legacy)
+                    try InstallationLocation.rejectLinks(archive)
+                    try fm.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    try durableWrite(data, to: archive)
+                    try fm.removeItem(at: legacy)
                     receipt = nil
                 } else {
                     try validateReceipt()
@@ -923,6 +949,12 @@ final class Installer {
         if let data = try? Data(contentsOf: logRoot.appendingPathComponent("latest.json")) {
             try data.write(to: bundle.appendingPathComponent("latest-transaction.json"))
         }
+        for name in ["latest.json", "previous.json"] {
+            let path = stateRoot.appendingPathComponent(name)
+            if (try? InstallationLocation.rejectLinks(path)) != nil, let data = try? Data(contentsOf: path) {
+                try Data(data.suffix(2_000_000)).write(to: bundle.appendingPathComponent("state-" + name))
+            }
+        }
         if let previous = receipt?.diagnosticsSession, UUID(uuidString: previous) != nil,
            previous != runDirectory.lastPathComponent {
             for name in ["installer.log", "application.log", "startup.json", "transaction.json", "error.txt"] {
@@ -954,6 +986,27 @@ final class Installer {
         try "系统：\(ProcessInfo.processInfo.operatingSystemVersionString)\n诊断文件可能包含本机路径和系统崩溃报告，请仅发给你信任的开发者。\n".write(to: bundle.appendingPathComponent("说明.txt"), atomically: true, encoding: .utf8)
         _ = try io.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", bundle.path, output.path], privileged: false)
     }
+}
+
+func exportUpdateFailure(_ message: String, installer: Installer?, logRoot: URL) throws -> URL {
+    let directory = installer?.runDirectory ?? logRoot.appendingPathComponent(UUID().uuidString)
+    try InstallationLocation.rejectLinks(directory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try durableWrite(Data(message.utf8), to: directory.appendingPathComponent("error.txt"))
+    let output = directory.appendingPathComponent("声场档案更新诊断.zip")
+    if let installer = installer {
+        try installer.exportDiagnostics(to: output)
+    } else {
+        // Initialization may fail before an Installer exists (e.g. authorization).
+        // Still produce a usable report without acquiring an installation lock.
+        let bundle = directory.appendingPathComponent("failure-report")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        try durableWrite(Data(message.utf8), to: bundle.appendingPathComponent("error.txt"))
+        try durableWrite(Data("系统：\(ProcessInfo.processInfo.operatingSystemVersionString)\n安装器初始化失败；未收集音乐库或音频。".utf8), to: bundle.appendingPathComponent("说明.txt"))
+        _ = try SystemIO(log: {_ in}).run("/usr/bin/ditto", ["-c", "-k", "--keepParent", bundle.path, output.path])
+    }
+    return output
 }
 
 // The elevated process accepts a closed set of installer actions, never arbitrary shell text.

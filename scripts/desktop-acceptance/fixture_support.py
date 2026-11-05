@@ -2,6 +2,16 @@
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def validate_origin(value):
+    parsed = urlsplit(value)
+    if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or not parsed.port
+            or parsed.netloc != f'127.0.0.1:{parsed.port}' or parsed.path not in ('', '/')
+            or parsed.query or parsed.fragment):
+        raise ValueError('Test origin must be http://127.0.0.1:<port>')
+    return value.rstrip('/')
 
 
 def manifest(root):

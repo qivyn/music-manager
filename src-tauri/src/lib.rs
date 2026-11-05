@@ -2,6 +2,8 @@ pub mod commands;
 pub mod operation_gate;
 pub mod db;
 pub mod startup_report;
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub mod local_update_test;
 #[cfg(target_os = "macos")]
 pub mod updater;
 #[cfg(target_os = "macos")]
@@ -123,6 +125,8 @@ pub fn run() {
             updater::download_app_update,
             #[cfg(target_os = "macos")]
             updater::restart_for_app_update,
+            #[cfg(target_os = "macos")]
+            updater::export_update_diagnostics,
             startup_report::report_startup_state,
             commands::init_db,
             commands::configure_database_startup,

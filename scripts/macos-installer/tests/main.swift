@@ -140,6 +140,118 @@ final class Fixture {
 }
 
 do {
+    try test("legacy handoff failure exports and reveals diagnostics before replying to the client") {
+        let f=try Fixture();let helper=f.root.appendingPathComponent("helper-diagnostics")
+        try fm.createDirectory(at:helper,withIntermediateDirectories:true)
+        let reply=helper.appendingPathComponent("handoff.json")
+        let request=InAppUpdateRequest(destination:f.destination,parentPID:12345,version:"0.2.8",reply:reply,token:helper.lastPathComponent)
+        var revealed:URL?
+        try request.respondToFailure("原安装失败", export: {
+            try check(!fm.fileExists(atPath:reply.path),"client could kill installer before export")
+            return try exportUpdateFailure("原安装失败",installer:f.engine,logRoot:f.logs)
+        }, reveal: {revealed=$0})
+        let data=try JSONSerialization.jsonObject(with:Data(contentsOf:reply)) as! [String:Any]
+        try check((data["error"] as? String)?.contains("原安装失败")==true,"original error lost")
+        try check(revealed != nil && fm.fileExists(atPath:revealed!.path),"diagnostic archive unavailable")
+        try check((data["error"] as? String)?.contains(revealed!.path)==true,"legacy app has no diagnostic location")
+        let content=try SystemIO(log:{_ in}).run("/usr/bin/unzip",["-p",revealed!.path,"*/error.txt"])
+        try check(content.contains("原安装失败"),"export omitted the failure")
+        try f.verifyLibrary()
+    }
+    try test("diagnostics can be exported when installer initialization failed") {
+        let f=try Fixture();f.engine=nil
+        let zip=try exportUpdateFailure("初始化失败",installer:nil,logRoot:f.logs)
+        let content=try SystemIO(log:{_ in}).run("/usr/bin/unzip",["-p",zip.path,"*/error.txt"])
+        try check(content.contains("初始化失败"),"missing initialization error")
+        try f.verifyLibrary()
+    }
+    for protocolVersion in [1, 2] {
+        try test("diagnostic export failure preserves original error for protocol \(protocolVersion)") {
+            let f=try Fixture();let helper=f.root.appendingPathComponent("helper-error")
+            try fm.createDirectory(at:helper,withIntermediateDirectories:true)
+            let reply=helper.appendingPathComponent("handoff.json")
+            var request=InAppUpdateRequest(destination:f.destination,parentPID:12345,version:"0.2.8",reply:reply,token:helper.lastPathComponent)
+            request.protocolVersion=protocolVersion;var attempted=false
+            try request.respondToFailure("原安装失败",export:{attempted=true;throw InstallError("导出目录不可写")},reveal:{_ in})
+            let data=try JSONSerialization.jsonObject(with:Data(contentsOf:reply)) as! [String:Any]
+            let message=data["error"] as! String
+            try check(message.contains("原安装失败"),"original error hidden")
+            try check(attempted == (protocolVersion==1),"new client unexpectedly auto-exported")
+            try check(message.contains("未能自动导出") == (protocolVersion==1),"export failure was misleading")
+        }
+    }
+    for oldVersion in ["0.2.6", "0.2.7"] {
+    for phase in ["completed", "restored", "failed_before_replace"] {
+        try test("\(oldVersion) personal receipt stays in legacy evidence when updating to 0.2.8: \(phase)") {
+            let f = try Fixture(old: nil, new: "0.2.8")
+            f.engine = nil
+            let personal = f.root.appendingPathComponent("PersonalApplications/声场档案.app")
+            try f.app(personal, version: oldVersion, schema: 3)
+            let session = UUID().uuidString
+            let parent = personal.deletingLastPathComponent()
+            // Exact v0.2.7 record shape: none of the v2 optional fields exist.
+            let bytes = try JSONSerialization.data(withJSONObject: [
+                "session": session, "destination": personal.path,
+                "backup": parent.appendingPathComponent(".music-manager-backups/\(session)/声场档案.app").path,
+                "staging": parent.appendingPathComponent(".music-manager-stage-\(session).app").path,
+                "version": oldVersion, "previousVersion": "0.2.5", "previousSchema": 3,
+                "diagnosticsSession": UUID().uuidString, "phase": phase, "launched": true
+            ])
+            let legacy = f.logs.appendingPathComponent("latest.json")
+            try durableWrite(bytes, to: legacy)
+            let state = f.root.appendingPathComponent("system-state")
+            f.engine = try Installer(source: f.source, destination: f.destination, logRoot: f.logs,
+                                     io: f.io, systemChecks: false, stateRoot: state)
+            try check(f.engine!.recoveryError == nil && f.engine!.receipt == nil, "completed personal receipt blocked update")
+            let archive = f.logs.appendingPathComponent("transactions/\(session).json")
+            try check(fm.fileExists(atPath: archive.path), "personal receipt was incorrectly archived into system state")
+            try check(try Data(contentsOf: archive) == bytes, "legacy evidence was rewritten")
+            try check(!fm.fileExists(atPath: state.appendingPathComponent("transactions").path), "personal record crossed system state boundary")
+            try check(!fm.fileExists(atPath: legacy.path), "archived receipt remained active")
+            f.engine!.migrationSources = [personal]
+            try f.engine!.validateInAppUpdate(version: "0.2.8")
+            try f.engine!.install()
+            try check(try AppInfo.read(f.destination).version == "0.2.8", "migration did not install new app")
+            try check(fm.fileExists(atPath: personal.path), "old app removed before startup")
+            let current = try JSONDecoder().decode(InstallReceipt.self, from: Data(contentsOf: state.appendingPathComponent("latest.json")))
+            try check(current.destination == f.destination.path, "system record has wrong destination")
+            try f.readyExecutable(version: "0.2.8")
+            try check(try f.engine!.launch(timeout: 3) == .ready, "new app did not confirm startup")
+            try check(!fm.fileExists(atPath: personal.path), "verified legacy app remained after startup")
+            try check(try Data(contentsOf: archive) == bytes, "migration removed historical evidence")
+            try f.verifyLibrary()
+        }
+    }
+    }
+    try test("a foreign receipt in dedicated state is rejected without touching either record") {
+        let f = try Fixture(); try f.engine!.install()
+        f.engine!.receipt!.phase = "completed"; try f.engine!.save(); f.engine = nil
+        let legacy = f.logs.appendingPathComponent("latest.json")
+        let bytes = try Data(contentsOf: legacy)
+        let state = f.root.appendingPathComponent("system-state")
+        try fm.createDirectory(at: state, withIntermediateDirectories: true)
+        try durableWrite(bytes, to: state.appendingPathComponent("latest.json"))
+        let moved = f.root.appendingPathComponent("OtherApplications/声场档案.app")
+        f.engine = try Installer(source: f.source, destination: moved, logRoot: f.logs,
+                                 io: f.io, systemChecks: false, stateRoot: state)
+        try check(f.engine!.recoveryError != nil, "foreign system state was discarded")
+        try check(try Data(contentsOf: legacy) == bytes, "legacy record changed")
+        try check(try Data(contentsOf: state.appendingPathComponent("latest.json")) == bytes, "dedicated record changed")
+        try f.verifyLibrary()
+    }
+    try test("legacy archive failure retains the active receipt and blocks migration") {
+        let f = try Fixture(); try f.engine!.install()
+        f.engine!.receipt!.phase = "completed"; try f.engine!.save(); f.engine = nil
+        let legacy = f.logs.appendingPathComponent("latest.json")
+        let bytes = try Data(contentsOf: legacy)
+        try fm.createSymbolicLink(at: f.logs.appendingPathComponent("transactions"), withDestinationURL: f.sentinel.deletingLastPathComponent())
+        let moved = f.root.appendingPathComponent("OtherApplications/声场档案.app")
+        f.engine = try Installer(source: f.source, destination: moved, logRoot: f.logs,
+                                 io: f.io, systemChecks: false, stateRoot: f.root.appendingPathComponent("system-state"))
+        try check(f.engine!.recoveryError != nil, "unsafe archive allowed migration")
+        try check(try Data(contentsOf: legacy) == bytes, "archive failure discarded recovery evidence")
+        try f.verifyLibrary()
+    }
     try test("migration accepts the macOS private tmp system alias") {
         let f=try Fixture(old:nil)
         let root=URL(fileURLWithPath:"/private/tmp/mm-migration-alias-"+UUID().uuidString)

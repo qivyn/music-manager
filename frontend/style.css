@@ -8003,9 +8003,62 @@ body.view-home .top-nav .nav-count { border: 0; background: none; color: var(--h
     border-bottom-width: 2px;
     border-radius: 5px;
 }
-/* Software updates share the app's existing modal and theme styles. */
-.update-body p { margin: 0 0 16px; }
-.update-body progress { width: 85%; accent-color: var(--primary); }
-.update-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; line-height: 1.65; margin-top: 20px; }
-#updateStatus { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Update status is primary; paths and raw errors stay in optional details. */
+#updateModal .update-dialog { width: 580px; max-width: calc(100vw - 40px); max-height: calc(100vh - 48px); border-radius: 20px; color: var(--text); }
+#updateModal .modal-header { height: auto; min-height: 88px; padding: 20px 26px; flex-shrink: 0; }
+#updateModal .modal-header h2 { font-size: 23px; font-weight: 600; letter-spacing: .04em; line-height: 1.3; }
+#updateModal .update-app-name { margin: 5px 0 0; color: var(--subtext); font-size: 12px; letter-spacing: .08em; }
+#updateModal .modal-header .icon-btn { width: 34px; height: 34px; min-width: 34px; border: 1px solid var(--border); border-radius: 50%; font-size: 21px; }
+#updateModal .update-body { padding: 24px 26px 18px; display: flex; flex-direction: column; gap: 22px; min-height: 0; }
+#updateModal .update-body > * { flex-shrink: 0; }
+#updateModal .update-body p { margin: 0; }
+#updateModal .update-version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+#updateModal .update-installed-version { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+#updateModal .update-label { color: var(--subtext); font-size: 12px; }
+#updateModal #updateVersion { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#updateModal .update-chip { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--subtext); font-size: 11px; line-height: 1.25; }
+#updateModal .update-target-version { color: var(--primary-strong, var(--primary)); font-size: 12px; font-weight: 600; }
+#updateModal .update-status-panel { display: flex; align-items: flex-start; gap: 14px; padding: 18px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); }
+#updateModal .update-status-icon { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border: 1px solid currentColor; border-radius: 50%; color: var(--primary-strong, var(--primary)); font-size: 20px; line-height: 1; }
+#updateModal .update-status-copy { min-width: 0; flex: 1; }
+#updateModal h3 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.5; letter-spacing: 0; }
+#updateModal #updateStatusMessage { margin-top: 6px; color: var(--subtext); font-size: 13px; line-height: 1.7; }
+#updateModal [data-tone="warning"] { background: var(--warning-soft, var(--surface)); }
+#updateModal [data-tone="warning"] .update-status-icon { color: var(--warning, var(--text)); font-size: 18px; font-weight: 600; }
+#updateModal [data-tone="success"] .update-status-icon { background: var(--primary-light); }
+#updateModal .update-progress-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+#updateModal .update-progress-row progress { min-width: 0; flex: 1; height: 6px; accent-color: var(--primary); }
+#updateModal #updateProgressLabel { color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
+#updateModal .update-details { color: var(--subtext); font-size: 12px; line-height: 1.65; }
+#updateModal .update-details summary { width: fit-content; cursor: pointer; padding: 2px 0; }
+#updateModal .update-status-panel .update-details { margin-top: 10px; }
+#updateModal .update-body .update-technical-text { margin: 9px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface); color: var(--subtext); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; user-select: text; }
+#updateModal .update-release-notes h3 { margin-bottom: 9px; }
+#updateModal[data-update-error="true"] .update-release-notes { order: 1; }
+#updateModal .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; font-size: 13px; line-height: 1.75; color: var(--subtext); }
+#updateModal .update-diagnostics { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 18px; padding-top: 20px; border-top: 1px solid var(--border); }
+#updateModal .update-diagnostics-copy { flex: 1 1 230px; min-width: 0; }
+#updateModal .update-diagnostics h3 { font-size: 13px; }
+#updateModal #updateDiagnosticsStatus { margin-top: 5px; color: var(--subtext); font-size: 12px; line-height: 1.7; }
+#updateModal .update-diagnostics .update-privacy-note { margin-top: 6px; font-size: 11px; color: var(--subtext); opacity: .8; }
+#updateModal .update-diagnostic-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; }
+#updateModal .update-text-button { padding: 5px 0; border: 0; background: none; color: var(--primary-strong, var(--primary)); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; box-shadow: none; }
+#updateModal .update-text-button:hover { text-decoration: underline; text-underline-offset: 3px; }
+#updateModal .update-text-button:disabled { opacity: .45; cursor: default; text-decoration: none; }
+#updateModal .update-text-button:focus-visible, #updateModal summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 3px; }
+#updateModal .update-diagnostics[data-saved="true"] { padding: 16px 18px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); }
+#updateModal .update-diagnostics[data-saved="true"] .update-diagnostics-copy { flex-basis: 100%; }
+#updateModal .update-diagnostic-filename { display: block; max-width: 100%; margin-top: 10px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#updateModal #updateDiagnosticsDetails { flex-basis: 100%; }
+#updateModal .update-installation-details { padding-top: 2px; order: 2; }
+#updateModal .update-installation-details .update-text-button { margin-top: 6px; }
+#updateModal .modal-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; height: auto; min-height: 76px; padding: 16px 26px; flex-shrink: 0; }
+#updateModal .update-secondary-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+#updateModal .primary-btn, #updateModal .secondary-btn { min-height: 38px; padding: 9px 15px; font-size: 13px; line-height: 1.4; border-radius: 9px; letter-spacing: 0; box-shadow: none; transform: none; }
+#updateModal #updateActionBtn { margin-left: auto; min-width: 112px; }
+@media (max-height: 700px) {
+    #updateModal .modal-header { min-height: 76px; padding-top: 16px; padding-bottom: 16px; }
+    #updateModal .update-body { padding-top: 18px; gap: 17px; }
+    #updateModal .update-notes { max-height: 130px; }
+}
 #updateModal [hidden] { display: none !important; }

@@ -344,24 +344,53 @@
 <!-- ============================= -->
 
 <div id="updateModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
-    <div class="modal-box small">
+    <div class="modal-box update-dialog">
         <div class="modal-header">
-            <h2 id="updateTitle">软件更新</h2>
+            <div><h2 id="updateTitle">软件更新</h2><p class="update-app-name">声场档案</p></div>
             <button id="closeUpdateBtn" class="icon-btn" type="button" aria-label="关闭更新窗口">×</button>
         </div>
         <div class="modal-body update-body">
-            <p id="updateVersion">声场档案</p>
-            <p id="updateInstallation" style="overflow-wrap:anywhere;white-space:pre-line"></p>
-            <button id="updateRevealBtn" class="secondary-btn" type="button">在 Finder 中显示</button>
-            <p id="updateStatus" role="status" aria-live="polite"></p>
-            <progress id="updateProgress" aria-label="更新下载进度" hidden></progress>
-            <span id="updateProgressLabel" hidden></span>
-            <div id="updateNotes" class="update-notes" hidden></div>
+            <div class="update-version-row">
+                <div class="update-installed-version"><span class="update-label">当前版本</span><strong id="updateVersion">读取中…</strong><span id="updateArchitecture" class="update-chip" hidden></span></div>
+                <span id="updateTargetVersion" class="update-target-version" hidden></span>
+            </div>
+            <section id="updateStatusPanel" class="update-status-panel" data-tone="neutral" aria-labelledby="updateStatusTitle">
+                <span id="updateStatusIcon" class="update-status-icon" aria-hidden="true">↓</span>
+                <div class="update-status-copy">
+                    <h3 id="updateStatusTitle">检查是否有可用更新</h3>
+                    <p id="updateStatusMessage" role="status" aria-live="polite"></p>
+                    <div id="updateProgressRow" class="update-progress-row" hidden><progress id="updateProgress" aria-label="更新下载进度" hidden></progress><span id="updateProgressLabel" hidden></span></div>
+                    <details id="updateErrorDetails" class="update-details" hidden><summary>错误详情</summary><p id="updateStatus" class="update-technical-text"></p></details>
+                </div>
+            </section>
+            <section id="updateNotesSection" class="update-release-notes" hidden>
+                <h3>新版内容</h3><div id="updateNotes" class="update-notes"></div>
+            </section>
+            <section id="updateDiagnosticsCard" class="update-diagnostics" data-saved="false" aria-labelledby="updateDiagnosticsTitle">
+                <div class="update-diagnostics-copy">
+                    <h3 id="updateDiagnosticsTitle">遇到更新问题</h3>
+                    <p id="updateDiagnosticsStatus" role="status" aria-live="polite">导出诊断文件，便于管理员或开发者排查。</p>
+                    <span id="updateDiagnosticsFile" class="update-diagnostic-filename" hidden></span>
+                    <p class="update-privacy-note">诊断文件不含音乐库和音频。</p>
+                </div>
+                <div class="update-diagnostic-actions">
+                    <button id="updateDiagnosticsRevealBtn" class="secondary-btn" type="button" hidden>在 Finder 中显示诊断文件</button>
+                    <button id="updateDiagnosticsBtn" class="update-text-button" type="button">导出诊断信息</button>
+                </div>
+                <details id="updateDiagnosticsDetails" class="update-details" hidden><summary>文件详情</summary><p id="updateDiagnosticsPath" class="update-technical-text"></p><p id="updateDiagnosticsError" class="update-technical-text" hidden></p></details>
+            </section>
+            <details id="updateInstallationDetails" class="update-details update-installation-details">
+                <summary>安装信息</summary>
+                <p id="updateInstallation" class="update-technical-text"></p>
+                <button id="updateRevealBtn" class="update-text-button" type="button">在 Finder 中显示应用</button>
+            </details>
         </div>
         <div class="modal-footer">
-            <button id="updateCancelBtn" class="secondary-btn" type="button" hidden>取消下载</button>
-            <button id="updateCleanupBtn" class="secondary-btn" type="button" hidden>重试清理</button>
-            <button id="updateRecheckBtn" class="secondary-btn" type="button" hidden>重新检查</button>
+            <div class="update-secondary-actions">
+                <button id="updateCancelBtn" class="secondary-btn" type="button" hidden>取消下载</button>
+                <button id="updateCleanupBtn" class="secondary-btn" type="button" hidden>重试清理</button>
+                <button id="updateRecheckBtn" class="update-text-button" type="button" hidden>重新检查</button>
+            </div>
             <button id="updateActionBtn" class="primary-btn" type="button">检查更新</button>
         </div>
     </div>

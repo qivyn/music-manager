@@ -47,6 +47,7 @@
             case "init_db": return true;
             case "get_installation_status": return {installationPath:"/Applications/声场档案.app",currentVersion:"本地预览",arch:"aarch64",canUpdate:true,otherInstallations:[]};
             case "get_update_status": return {phase:"idle",currentVersion:"本地预览",targetVersion:null,message:"点击检查，获取最新版本。",cleanupPending:false};
+            case "export_update_diagnostics": return null;
             case "cancel_app_update": case "prepare_update_exit": case "abort_update_exit": case "retry_update_cleanup": case "show_installation_in_finder": return null;
             case "check_app_update": return { currentVersion: "本地预览", version: null };
             case "get_database_path": return "/Users/qi/Library/Application Support/com.musicmanager.app/library.db";

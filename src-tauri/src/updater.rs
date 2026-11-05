@@ -17,6 +17,8 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 pub const PUBLIC_KEY: &str = include_str!("../updater-public-key.txt");
 const APP_NAME: &str = "声场档案.app";
 const INSTALLER_NAME: &str = "安装与更新声场档案.app";
+#[path = "update_diagnostics.rs"]
+mod diagnostics;
 
 #[derive(Debug,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -40,6 +42,17 @@ impl From<String> for UpdateError {
 impl From<&str> for UpdateError {fn from(message:&str)->Self{message.to_string().into()}}
 impl From<UpdateError> for String {fn from(error:UpdateError)->Self{error.message}}
 type CommandResult<T> = Result<T,UpdateError>;
+
+#[tauri::command]
+pub async fn export_update_diagnostics(app: tauri::AppHandle, destination: PathBuf, context: serde_json::Value) -> CommandResult<()> {
+    if serde_json::to_vec(&context).map_err(|e|e.to_string())?.len()>32_768 {return Err("诊断上下文过长".into());}
+    let id=if app.config().identifier=="com.musicmanager.app" {"com.musicmanager.installer".to_string()}
+        else {format!("{}.installer",app.config().identifier)};
+    let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);
+    let states=installer_state_roots(&app)?;let cache=cache_root(&app)?;
+    Ok(tauri::async_runtime::spawn_blocking(move || diagnostics::export_to(&destination,&logs,&states,&cache,&context))
+        .await.map_err(|e|e.to_string())??)
+}
 
 #[derive(Default)]
 pub struct UpdateManager {

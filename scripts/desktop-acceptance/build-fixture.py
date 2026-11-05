@@ -6,6 +6,7 @@ Generate ROOT/fixture-updater.key(.pub) with `cargo tauri signer generate` first
 Only copied Rust configuration and a separate IPC latency adapter differ from the app.
 """
 import hashlib
+import argparse
 import json
 import plistlib
 import io
@@ -17,20 +18,26 @@ import shutil
 import subprocess
 import sys
 sys.dont_write_bytecode=True
-from fixture_support import manifest, record
+from fixture_support import manifest, record, validate_origin
 
 REPO = Path(__file__).resolve().parents[2]
-root = Path(sys.argv[1]).resolve()
-version = sys.argv[2]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('root', type=Path)
+parser.add_argument('version')
+parser.add_argument('ref', nargs='?')
+parser.add_argument('--origin', default='http://127.0.0.1:18764', type=validate_origin)
+args = parser.parse_args()
+root = args.root.resolve()
+version = args.version
 assert root.parent == Path('/private/tmp') and root.name.startswith('music-manager-desktop-')
 assert re.fullmatch(r'\d+\.\d+\.\d+', version)
 identifier = manifest(root)['identifier']
-origin = 'http://127.0.0.1:18764'
+origin = args.origin
 work = root / ('source-' + version)
 assert not work.exists(), f'Preserve existing fixture: {work}'
 source_repo=REPO
-if len(sys.argv)>3:
-    ref=sys.argv[3]
+if args.ref:
+    ref=args.ref
     assert re.fullmatch(r'v0\.2\.[67]',ref)
     source_repo=root/('historical-'+ref)
     source_repo.mkdir(exist_ok=True)
@@ -71,6 +78,8 @@ p = rust / 'src/updater.rs'
 text = p.read_text().replace('com.musicmanager.installer', identifier + '.installer').replace('com.musicmanager.app', identifier)
 text = text.replace('https://github.com/qivyn/music-manager/releases/download', origin + '/releases/download').replace('https://github.com/AI-AQI/music-manager/releases/download', origin + '/releases/download')
 text = text.replace('app.path().app_cache_dir().map_err(|e| e.to_string())?', 'PathBuf::from(' + json.dumps(str(root / 'cache')) + ')')
+text = text.replace('let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);',
+                    'let logs=PathBuf::from(' + json.dumps(str(root / 'logs')) + ');')
 state_pattern='vec![PathBuf::from("/Library/Application Support/com.musicmanager.installer/system"),home.join("Library/Application Support/com.musicmanager.installer/user")]'
 state_pattern=state_pattern.replace('com.musicmanager.installer',identifier+'.installer')
 text = text.replace(state_pattern,'vec![PathBuf::from(' + json.dumps(str(root / 'logs/state')) + ')]')
@@ -120,7 +129,7 @@ p = work / 'frontend/index.html'
 p.write_text(p.read_text().replace('<script src="app.js"></script>', '<script src="acceptance-fixture.js"></script>\n<script src="app.js"></script>'))
 manifest = {'version': version, 'identifier':identifier, 'sourceAppSha256':hashlib.sha256((REPO/'frontend/app.js').read_bytes()).hexdigest(), 'fixtureAppSha256':hashlib.sha256((work/'frontend/app.js').read_bytes()).hexdigest(), 'root':str(root), 'origin':origin}
 (work / 'fixture-manifest.json').write_text(json.dumps(manifest,indent=2))
-env=os.environ.copy(); env['CARGO_TARGET_DIR']=str(REPO/'src-tauri/target'); env['CARGO_NET_OFFLINE']='true'
+env=os.environ.copy(); env['CARGO_TARGET_DIR']=str(REPO/'src-tauri/target'); env.setdefault('CARGO_NET_OFFLINE','true')
 with (root / ('build-' + version + '.log')).open('w') as log:
  result=subprocess.run(['cargo','tauri','build','--debug','--bundles','app','--ci'],cwd=rust,env=env,stdout=log,stderr=subprocess.STDOUT)
 if result.returncode: print('Build failed, see',log.name); sys.exit(result.returncode)
