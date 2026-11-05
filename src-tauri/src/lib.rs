@@ -106,6 +106,7 @@ pub fn run() {
             updater::check_app_update,
             #[cfg(target_os = "macos")]
             updater::get_installation_status,
+            updater::get_update_welcome,
             #[cfg(target_os="macos")]
             installer_bridge::respond_installer_exit,
             #[cfg(target_os = "macos")]

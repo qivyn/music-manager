@@ -59,6 +59,7 @@
         </nav>
 
         <div class="top-actions">
+            <button id="updateNoticeBtn" class="update-notice" type="button" hidden></button>
             <button id="sceneHelpBtn" class="scene-help-btn" type="button" aria-label="查看场景入口" aria-controls="homeScene" aria-expanded="false" title="查看场景入口">?</button>
             <button id="themeToggleBtn" class="theme-toggle appearance-toggle" type="button" aria-label="切换到月夜打盹" title="切换到月夜打盹">
                 <svg class="appearance-glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z"/></svg>
@@ -80,7 +81,7 @@
                 <div id="settingsMenu" class="theme-menu hidden" role="menu" aria-label="设置">
                     <button id="sceneMotionBtn" class="settings-action" type="button" role="menuitemcheckbox" aria-checked="true" tabindex="-1">场景微动效<span aria-hidden="true">开</span></button>
                     <button id="shortcutHelpBtn" class="settings-action" type="button" role="menuitem" tabindex="-1">快捷键<span aria-hidden="true">?</span></button>
-                    <button id="checkUpdateBtn" class="settings-action" type="button" role="menuitem" tabindex="-1">检查更新</button>
+                    <button id="checkUpdateBtn" class="settings-action" type="button" role="menuitem" tabindex="-1">检查更新<span id="checkUpdateBadge" class="update-menu-badge" hidden></span></button>
                 </div>
             </div>
             <button id="openCandidatePanelBtn" class="secondary-btn candidate-panel-trigger" type="button" title="候选清单" aria-label="打开候选清单" aria-expanded="false">

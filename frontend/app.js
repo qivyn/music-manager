@@ -41,7 +41,7 @@ async function prepareApplicationUpdate(needsAuthorization = false, onConfirmed 
     const accepted = await __TAURI__.dialog.ask(
         "声场档案将退出，安装新版后自动重新打开。未保存的输入不会保留，音乐库和音频不受影响。"
             + (needsAuthorization ? "\n当前账户不能直接写入安装位置，系统会请求管理员密码。" : ""),
-        { title: "退出并安装更新？", kind: "info", okLabel: "退出并安装", cancelLabel: "取消" }
+        { title: "退出并安装更新？", kind: "info", okLabel: "现在重启", cancelLabel: "稍后" }
     );
     if (!accepted) return null;
     if (databaseSwitchInProgress || applicationUpdateInProgress) throw new Error("其他操作尚未完成，请稍后更新");

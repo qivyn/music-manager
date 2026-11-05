@@ -57,19 +57,6 @@ fn installer_log_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);
     Ok(logs)
 }
-/// An installer window holds this lock while it works (older releases: while open).
-/// Checking first avoids quitting into a handoff that cannot proceed.
-fn ensure_no_active_installer(logs: &Path) -> Result<(), String> {
-    use std::os::fd::AsRawFd;
-    let lock = logs.join("installer.lock");
-    update_store::reject_links(&lock)?;
-    let Ok(file) = fs::File::open(&lock) else { return Ok(()) };
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 { return Ok(()); }
-    let holder = fs::read_to_string(&lock).ok().and_then(|s| s.trim().parse::<i32>().ok())
-        .filter(|pid| *pid > 1 && unsafe { libc::kill(*pid, 0) } == 0)
-        .map(|pid| format!("（进程 {pid}）")).unwrap_or_default();
-    Err(format!("另一个“安装与更新声场档案”窗口正在运行{holder}。请切换到那个窗口：正在安装时请等待完成；已经空闲时按 ⌘Q 退出，然后重试。当前应用未被修改。"))
-}
 
 #[derive(Default)]
 pub struct UpdateManager {
@@ -363,7 +350,6 @@ pub async fn restart_for_app_update(app: tauri::AppHandle, state: tauri::State<'
         &std::env::current_exe().map_err(|e| e.to_string())?,
         &app.path().home_dir().map_err(|e| e.to_string())?,
     )?;
-    ensure_no_active_installer(&installer_log_root(&app)?)?;
     crate::operation_gate::WRITES.pause(Duration::from_secs(60))?;
     progress(&app, "preparing", 0, None);
     let cancel_path = job.join("cancel-request");
@@ -430,6 +416,16 @@ fn installation(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     update_store::reject_links(&path)?;
     if plist(&path,"CFBundleIdentifier")? != app.config().identifier { return Err("安装身份不匹配".into()); }
     Ok(path)
+}
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct UpdateWelcome { version: String, notes: String, launched_by_installer: bool, previous_version: Option<String> }
+/// What the app shows once after it was installed or updated: this version's own notes.
+#[tauri::command]
+pub fn get_update_welcome() -> UpdateWelcome {
+    UpdateWelcome { version: crate::db::APP_VERSION.into(), notes: include_str!("../../docs/update-notes.txt").trim().into(),
+        launched_by_installer: std::env::var("MUSIC_MANAGER_STARTUP_SESSION").is_ok_and(|s| !s.is_empty()),
+        previous_version: std::env::var("MUSIC_MANAGER_PREVIOUS_VERSION").ok().filter(|v| semver::Version::parse(v).is_ok()) }
 }
 #[tauri::command]
 pub fn get_installation_status(app: tauri::AppHandle) -> CommandResult<InstallationStatus> {
@@ -632,19 +628,10 @@ mod tests {
         cleanup_downloads(&root,&[states]).unwrap();assert!(!root.join("update-owned").exists());assert!(root.join("update-unknown").exists());
     }
     #[test]
-    fn active_installer_window_blocks_handoff_and_names_its_process() {
-        use std::os::fd::AsRawFd;
-        let temp=tempfile::tempdir().unwrap();
-        assert!(ensure_no_active_installer(temp.path()).is_ok());
-        let lock=temp.path().join("installer.lock");
-        fs::write(&lock,format!("{}\n",std::process::id())).unwrap();
-        assert!(ensure_no_active_installer(temp.path()).is_ok(), "an unlocked file is not an active installer");
-        let holder=fs::File::open(&lock).unwrap();
-        assert_eq!(unsafe{libc::flock(holder.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)},0);
-        let message=ensure_no_active_installer(temp.path()).unwrap_err();
-        assert!(message.contains(&format!("进程 {}",std::process::id())) && message.contains("⌘Q"), "{message}");
-        drop(holder);
-        assert!(ensure_no_active_installer(temp.path()).is_ok());
+    fn welcome_notes_belong_to_this_version() {
+        let welcome=get_update_welcome();
+        assert_eq!(welcome.version,crate::db::APP_VERSION);
+        assert!(welcome.notes.contains(&format!("v{}",crate::db::APP_VERSION)),"update notes do not describe this version");
     }
     #[test]
     fn concurrent_update_operations_are_rejected_and_failures_release_lock() {

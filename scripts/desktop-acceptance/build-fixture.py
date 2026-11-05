@@ -46,6 +46,10 @@ if args.ref:
         tar.extractall(source_repo,filter='data')
 shutil.copytree(source_repo / 'frontend', work / 'frontend')
 shutil.copytree(source_repo / 'src-tauri', work / 'src-tauri', ignore=shutil.ignore_patterns('target', 'gen'))
+# Current sources embed this version's update notes; historical tags predate that.
+if (source_repo / 'docs/update-notes.txt').is_file():
+    (work / 'docs').mkdir()
+    shutil.copyfile(source_repo / 'docs/update-notes.txt', work / 'docs/update-notes.txt')
 rust = work / 'src-tauri'
 public = (root / 'fixture-updater.key.pub').read_text().strip()
 (rust / 'updater-public-key.txt').write_text(public + '\n')

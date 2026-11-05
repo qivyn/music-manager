@@ -48,6 +48,8 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     var busy = false
     var updateRequest: InAppUpdateRequest?
     var packageVersion:NSTextField!
+    var heading: NSTextField!
+    var subtitle: NSTextField!
     var diagnosticsRoot: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,11 +67,11 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         window.delegate = self
         window.isReleasedWhenClosed = false
         let content = window.contentView!
-        let heading = NSTextField(labelWithString: "安装与更新声场档案")
+        heading = NSTextField(labelWithString: "安装与更新声场档案")
         heading.font = .systemFont(ofSize: 23, weight: .semibold)
         heading.frame = NSRect(x: 28, y: 274, width: 560, height: 36)
         content.addSubview(heading)
-        let subtitle = NSTextField(wrappingLabelWithString: "在已安装的位置原地更新，新版启动确认后清理旧版备份。失败时保留恢复材料；音乐库和原始音频独立保留。")
+        subtitle = NSTextField(wrappingLabelWithString: "在已安装的位置原地更新，新版启动确认后清理旧版备份。失败时保留恢复材料；音乐库和原始音频独立保留。")
         subtitle.frame = NSRect(x: 28, y: 218, width: 560, height: 48)
         content.addSubview(subtitle)
         packageVersion = NSTextField(labelWithString: "安装包版本：…")
@@ -108,6 +110,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             #endif
             diagnosticsRoot = logRoot
             updateRequest = try InAppUpdateRequest.parse(Array(CommandLine.arguments.dropFirst()), allowedDestinations: [shared, personal])
+            if updateRequest != nil { showUpdateProgressLayout() }
             // Update in place: the running app's own location, or the installation already on this Mac.
             let (destination, others) = updateRequest.map { ($0.destination, []) }
                 ?? chooseDestination(shared: shared, personal: personal, identifier: identifier, stateRoot: stateRoot, logRoot: logRoot)
@@ -116,7 +119,8 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             installer = try Installer(source: source, destination: destination, logRoot: logRoot, identifier: identifier, stateRoot: stateRoot, progress: { [weak self] message in
                 DispatchQueue.main.async { self?.status.stringValue = message }
             })
-            packageVersion.stringValue = "安装包版本：\(info.version)　安装位置：\((destination.path as NSString).abbreviatingWithTildeInPath)"
+            let location = (destination.path as NSString).abbreviatingWithTildeInPath
+            packageVersion.stringValue = updateRequest == nil ? "安装包版本：\(info.version)　安装位置：\(location)" : "更新到 \(info.version)　位置：\(location)"
             status.stringValue = "点击“安装 / 更新”开始。失败后可以在这里恢复旧版或导出诊断信息。"
             if !others.isEmpty {
                 status.stringValue += "\n另有副本位于 \(others.map { ($0.path as NSString).abbreviatingWithTildeInPath }.joined(separator: "、"))，不会被修改。"
@@ -128,7 +132,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             if let request = updateRequest, let installer = installer {
                 installer.cancelRequested={request.cancelled}
                 installer.downloadTransaction=request.reply.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
-                status.stringValue = "正在准备目标安装，当前应用保持运行…"
+                status.stringValue = "正在准备新版，请稍候…"
                 perform(completion: { NSApp.terminate(nil) }) {
                     do {try installer.validateInAppUpdate(version: request.version);try installer.prepare();try request.respond()}
                     catch {self.respondToUpdateFailure(error);throw error}
@@ -193,7 +197,24 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             }
         }
     }
+    /// In-app updates need no decisions from the user, so hide the recovery buttons until something fails.
+    func showUpdateProgressLayout() {
+        heading.stringValue = "正在更新声场档案"
+        subtitle.stringValue = "更新完成后会自动打开新版，无需任何操作。音乐库和原始音频不受影响。"
+        for button in [installButton, retryButton, restoreButton, exportButton] { button?.isHidden = true }
+    }
+    func showRecoveryLayout() {
+        heading.stringValue = "更新未完成"
+        subtitle.stringValue = "旧版和音乐库都已保留。可以重新尝试、恢复旧版，或导出诊断信息发给开发者。"
+        for button in [installButton, retryButton, restoreButton, exportButton] { button?.isHidden = false }
+    }
+    /// After a confirmed startup the new app is in front; an open installer window only gets in the way.
+    func finishSuccessfully() {
+        status.stringValue += "\n此窗口将自动关闭。"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if !self.busy { NSApp.terminate(nil) } }
+    }
     func show(_ error: Error) {
+        if updateRequest != nil { showRecoveryLayout() }
         status.stringValue = error.localizedDescription
         if let dir = installer?.runDirectory {
             try? error.localizedDescription.write(to: dir.appendingPathComponent("error.txt"), atomically: true, encoding: .utf8)
@@ -215,11 +236,11 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     func applicationWillTerminate(_ notification:Notification) {closeInstallerWorker()}
     @objc func install() {
         guard let installer = installer else { return }
-        perform { try installer.install(); _ = try installer.launch(); try? installer.maintainEvidence() }
+        perform(completion: { self.finishSuccessfully() }) { try installer.install(); _ = try installer.launch(); try? installer.maintainEvidence() }
     }
     @objc func retry() {
         guard let installer = installer else { return }
-        perform { _ = try installer.launch() }
+        perform(completion: { self.finishSuccessfully() }) { _ = try installer.launch() }
     }
     @objc func restore() {
         guard let installer = installer else { return }
