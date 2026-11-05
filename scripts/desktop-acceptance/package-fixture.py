@@ -18,7 +18,6 @@ repo=Path(__file__).resolve().parents[2]
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('root',type=Path);parser.add_argument('version')
 parser.add_argument('--origin',default='http://127.0.0.1:18764',type=validate_origin)
-parser.add_argument('--migration',action='store_true',help='Migrate the old Applications copy into isolated SystemApplications')
 args=parser.parse_args()
 root=args.root.resolve(); version=args.version;origin=args.origin
 assert root.parent == Path('/private/tmp') and root.name.startswith('music-manager-desktop-')
@@ -27,15 +26,11 @@ image=root/('image-'+version); image.mkdir()
 installer=image/'安装与更新声场档案.app'
 (installer/'Contents/MacOS').mkdir(parents=True); (installer/'Contents/Resources').mkdir()
 main=(repo/'scripts/macos-installer/main.swift').read_text().replace('/private/tmp/music-manager-installer-ui',str(root)).replace('com.musicmanager.installertest',identifier)
-target=root/('SystemApplications' if args.migration else 'Applications')/'声场档案.app'
-if args.migration:
- main=main.replace('destination = testRoot.appendingPathComponent("Applications/声场档案.app")','destination = testRoot.appendingPathComponent("SystemApplications/声场档案.app")')
 # Maintenance must use the same isolated paths and identity as installation.
-main=main.replace('let shared=URL(fileURLWithPath:"/Applications/声场档案.app")','let shared=URL(fileURLWithPath:'+json.dumps(str(target),ensure_ascii=False)+')')
-main=main.replace('let personal=fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications/声场档案.app")','let personal=URL(fileURLWithPath:'+json.dumps(str(root/'Applications/声场档案.app'),ensure_ascii=False)+')')
-main=main.replace('let state=target==shared ? URL(fileURLWithPath:"/Library/Application Support/com.musicmanager.installer/system") : fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.musicmanager.installer/user")','let state=URL(fileURLWithPath:'+json.dumps(str(root/'logs/state'))+')')
+main=main.replace('let state=fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.musicmanager.installer/user")','let state=URL(fileURLWithPath:'+json.dumps(str(root/'logs/state'))+')')
 main=main.replace('let logs=fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/com.musicmanager.installer")','let logs=URL(fileURLWithPath:'+json.dumps(str(root/'logs'))+')')
 main=main.replace('let engine=try Installer(source:source,destination:target,logRoot:logs,stateRoot:state)','let engine=try Installer(source:source,destination:target,logRoot:logs,identifier:'+json.dumps(identifier)+',stateRoot:state)')
+assert str(root/'logs/state') in main and str(root/'logs') in main, 'Installer maintenance paths must stay isolated'
 source=root/('installer-source-'+version);source.mkdir(exist_ok=True)
 (source/'main.swift').write_text(main)
 (root/'swift-cache').mkdir(exist_ok=True)

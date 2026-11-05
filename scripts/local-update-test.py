@@ -122,8 +122,8 @@ class LocalUpdateLab:
             command += ['--origin', self.origin]
             run(command, self.path(f'prepare-{version}.log'))
         run([sys.executable, FIXTURES / 'package-fixture.py', self.root, self.new_version,
-             '--origin', self.origin, '--migration'], self.path('package.log'))
-        record(self.root, self.path('Applications'), self.path('SystemApplications'), self.path('cache'))
+             '--origin', self.origin], self.path('package.log'))
+        record(self.root, self.path('Applications'), self.path('cache'))
         historical = self.path('historical-v' + self.old_version)
         if historical.exists(): record(self.root, historical)
 
@@ -156,10 +156,8 @@ class LocalUpdateLab:
             raise ValueError('应用身份不属于本次测试，不会删除：' + str(app))
 
     def validate_app_directories(self):
-        for name in ('Applications', 'SystemApplications'):
-            directory = self.path(name)
-            for app in directory.rglob('*.app'):
-                self.assert_app(app)
+        for app in self.path('Applications').rglob('*.app'):
+            self.assert_app(app)
 
     def package(self):
         feed = json.loads(self.path('packages/latest.json').read_text())
@@ -173,9 +171,8 @@ class LocalUpdateLab:
         self.require_idle_installer()
         # Validate every destination before deleting even the first owned artifact.
         old = self.path('Applications/' + APP)
-        new = self.path('SystemApplications/' + APP)
-        for app in (old, new): self.assert_app(app)
-        paths = [self.path(name) for name in ('Applications', 'SystemApplications', 'cache', 'logs')]
+        self.assert_app(old)
+        paths = [self.path(name) for name in ('Applications', 'cache', 'logs')]
         self.validate_app_directories()
         source = self.path('app-' + self.old_version + '.app'); self.assert_app(source)
         if not source.is_dir() or not self.path('signed-master.dmg').is_file() or not self.package().is_file():
@@ -217,8 +214,7 @@ class LocalUpdateLab:
 
     def open_app(self):
         self.stop_apps()
-        candidate = self.path('SystemApplications/' + APP)
-        if not candidate.exists(): candidate = self.path('Applications/' + APP)
+        candidate = self.path('Applications/' + APP)
         self.assert_app(candidate)
         subprocess.run(['/usr/bin/open', '-n', str(candidate)], check=True, env=child_environment())
 

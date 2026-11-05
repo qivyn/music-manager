@@ -41,6 +41,25 @@ struct InstallError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+private func otherInstallerProcesses(_ bundleIdentifier: String) -> [NSRunningApplication] {
+    NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        .filter { !$0.isTerminated && $0.processIdentifier != getpid() }
+}
+/// Names the window holding the installer lock, so the user knows which one to finish or quit.
+func busyInstallerMessage(recorded: Int32?, bundleIdentifier: String) -> String {
+    var pids: [Int32] = []
+    if let pid = recorded, pid > 1, pid != getpid(), Darwin.kill(pid, 0) == 0 || errno == EPERM { pids.append(pid) }
+    for app in otherInstallerProcesses(bundleIdentifier) where !pids.contains(app.processIdentifier) { pids.append(app.processIdentifier) }
+    let process = pids.isEmpty ? "" : "（进程 \(pids.map(String.init).joined(separator: "、"))）"
+    return "另一个“安装与更新声场档案”窗口正在运行\(process)。请切换到那个窗口：正在安装时请等待完成；已经空闲时按 ⌘Q 退出，然后重试。当前应用未被修改。"
+}
+func installerProcessSummary(_ bundleIdentifier: String) -> String {
+    let lines = otherInstallerProcesses(bundleIdentifier).map { app in
+        "进程 \(app.processIdentifier)：\(app.bundleURL?.path ?? "未知位置")，启动于 \(app.launchDate.map { ISO8601DateFormatter().string(from: $0) } ?? "未知")"
+    }
+    return lines.isEmpty ? "没有其他安装窗口在运行。\n" : lines.joined(separator: "\n") + "\n"
+}
+
 struct InAppUpdateRequest {
     let destination: URL
     let parentPID: Int32
@@ -138,14 +157,6 @@ struct AppInfo {
     }
 }
 
-struct MigratedApplication: Codable {
-    let path: String
-    let version: String
-    let digest: String
-    let device: UInt64
-    let inode: UInt64
-}
-
 struct InstallReceipt: Codable {
     let session: String
     let destination: String
@@ -167,7 +178,6 @@ struct InstallReceipt: Codable {
     var previousTransaction: String? = nil
     var previousDigest:String? = nil
     var transactionId:String? = nil
-    var migrationSources: [MigratedApplication]? = nil
     var finished: Bool { ["completed", "restored", "failed_before_replace", "superseded"].contains(phase) }
 }
 
@@ -292,12 +302,12 @@ final class Installer {
     private(set) var recoveryError: String?
     var launchedProcess: Process?
     var cancelRequested:()->Bool = {false}
-    var migrationSources:[URL] = []
     var downloadTransaction:String?
     private var lockFD: Int32 = -1
     private var targetLockFD: Int32 = -1
     private var targetLocked=false
     private var appLog: FileHandle?
+    private var log: (String) -> Void = { _ in }
     private let systemChecks: Bool
     private let identifier: String
 
@@ -312,9 +322,6 @@ final class Installer {
         self.systemChecks = systemChecks
         self.identifier = identifier
         runDirectory = logRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try InstallationLocation.rejectLinks(logRoot)
-        try fm.createDirectory(at: runDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try durableWrite(JSONSerialization.data(withJSONObject:["identifier":identifier,"run":runDirectory.lastPathComponent,"logRoot":logRoot.path]),to:runDirectory.appendingPathComponent("run-owner.json"))
         let logFile = runDirectory.appendingPathComponent("installer.log")
         let logLock = NSLock()
         let append: (String) -> Void = { message in
@@ -326,72 +333,112 @@ final class Installer {
             }
         }
         self.io = io ?? SystemIO(log: append, identifier: identifier)
+        log = append
+        try InstallationLocation.rejectLinks(logRoot)
+        try fm.createDirectory(at: logRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // Check for another installer before creating logs or requesting any authorization.
+        try acquireSessionLock()
+        try fm.createDirectory(at: runDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try durableWrite(JSONSerialization.data(withJSONObject:["identifier":identifier,"run":runDirectory.lastPathComponent,"logRoot":logRoot.path]),to:runDirectory.appendingPathComponent("run-owner.json"))
         try InstallationLocation.rejectLinks(destination)
         try InstallationLocation.rejectLinks(self.stateRoot)
         try acquireTargetLock()
         try fm.createDirectory(at: self.stateRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         append("系统：\(ProcessInfo.processInfo.operatingSystemVersionString)；目标：\(destination.path)")
-        lockFD = Darwin.open(logRoot.appendingPathComponent("installer.lock").path, O_CREAT | O_RDWR, 0o600)
-        guard lockFD >= 0, flock(lockFD, LOCK_EX | LOCK_NB) == 0 else {
-            if lockFD >= 0 { Darwin.close(lockFD); lockFD = -1 }
-            throw InstallError("另一个安装窗口正在工作，请返回那个窗口完成操作。")
-        }
-        let legacy = logRoot.appendingPathComponent("latest.json")
-        let current = self.stateRoot.appendingPathComponent("latest.json")
-        let record = fm.fileExists(atPath: current.path) ? current : legacy
-        if let data = try? Data(contentsOf: record) {
-            do {
-                receipt = try JSONDecoder().decode(InstallReceipt.self, from: data)
-                if let r = receipt, r.destination != destination.path, r.finished {
-                    // Only the old shared Logs record may describe another target.
-                    // Dedicated system state must always belong to this destination.
-                    guard record == legacy else { throw InstallError("更新记录与安装位置不一致，已停止操作。请导出诊断信息。") }
-                    try validateReceipt(at: URL(fileURLWithPath: r.destination))
-                    // Preserve v0.2.6/0.2.7 evidence in its original user scope.
-                    // The privileged state writer correctly rejects personal paths.
-                    let archive = logRoot.appendingPathComponent("transactions/\(r.session).json")
-                    try InstallationLocation.rejectLinks(legacy)
-                    try InstallationLocation.rejectLinks(archive)
-                    try fm.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                    try durableWrite(data, to: archive)
-                    try fm.removeItem(at: legacy)
-                    receipt = nil
-                } else {
-                    try validateReceipt()
-                }
-            } catch {
-                receipt = nil
-                recoveryError = "更新记录无法安全读取，已停止安装和恢复。请导出诊断信息发给开发者。"
-                append("更新记录错误：\(error.localizedDescription)")
-            }
-        }
+        try loadState()
     }
     deinit {
         appLog?.closeFile()
-        if lockFD >= 0 { flock(lockFD, LOCK_UN); Darwin.close(lockFD) }
-        try? releaseTargetLock()
+        releaseSession()
+    }
+    var installerBundleIdentifier: String {
+        identifier == "com.musicmanager.app" ? "com.musicmanager.installer" : identifier + ".installer"
+    }
+    // Held only while an operation runs, so an idle installer window never blocks an update.
+    private func acquireSessionLock() throws {
+        if lockFD >= 0 { return }
+        let path = logRoot.appendingPathComponent("installer.lock")
+        try InstallationLocation.rejectLinks(path)
+        let fd = Darwin.open(path.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw InstallError("无法创建安装锁，请检查目录权限：\(logRoot.path)") }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(fd)
+            let recorded = (try? String(contentsOf: path, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            throw InstallError(busyInstallerMessage(recorded: recorded, bundleIdentifier: installerBundleIdentifier))
+        }
+        // Releases before 0.2.10 lock without recording a PID; later holders identify themselves.
+        let pid = Data("\(getpid())\n".utf8)
+        _ = ftruncate(fd, 0)
+        _ = pid.withUnsafeBytes { Darwin.pwrite(fd, $0.baseAddress, pid.count, 0) }
+        lockFD = fd
+    }
+    /// Reacquires the locks and rereads the journal another installer may have changed meanwhile.
+    func resumeSession() throws {
+        if lockFD < 0 {
+            try acquireSessionLock()
+            do { try acquireTargetLock(); try loadState() } catch { releaseSession(); throw error }
+        }
+        try acquireTargetLock()
+    }
+    func releaseSession() {
+        releaseTargetLock()
+        if lockFD >= 0 { _ = ftruncate(lockFD, 0); flock(lockFD, LOCK_UN); Darwin.close(lockFD); lockFD = -1 }
+    }
+    private func loadState() throws {
+        receipt = nil; recoveryError = nil
+        let legacy = logRoot.appendingPathComponent("latest.json")
+        let current = stateRoot.appendingPathComponent("latest.json")
+        let record = fm.fileExists(atPath: current.path) ? current : legacy
+        guard let data = try? Data(contentsOf: record) else { return }
+        do {
+            receipt = try JSONDecoder().decode(InstallReceipt.self, from: data)
+            if let r = receipt, r.destination != destination.path {
+                guard r.finished else {
+                    receipt = nil
+                    recoveryError = "另一个位置（\(r.destination)）有未完成的更新，已停止操作。请先用安装器在该位置完成或恢复，再更新这里的副本。"
+                    log("未完成的其他位置事务：\(r.session) \(r.destination)")
+                    return
+                }
+                // A finished transaction of another copy is history, not state for this target.
+                // Archive it next to the record it came from (0.2.6/0.2.7 use the Logs record).
+                try validateReceipt(at: URL(fileURLWithPath: r.destination))
+                let archive = record.deletingLastPathComponent().appendingPathComponent("transactions/\(r.session).json")
+                try InstallationLocation.rejectLinks(record)
+                try InstallationLocation.rejectLinks(archive)
+                try fm.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try durableWrite(data, to: archive)
+                try fm.removeItem(at: record)
+                receipt = nil
+            } else {
+                try validateReceipt()
+            }
+        } catch {
+            receipt = nil
+            recoveryError = "更新记录无法安全读取，已停止安装和恢复。请导出诊断信息发给开发者。"
+            log("更新记录错误：\(error.localizedDescription)")
+        }
     }
     func acquireTargetLock() throws {
         if targetLocked{return}
-        if destination.path=="/Applications/声场档案.app" && systemChecks {
-            try privilegedInstallerAction(["action":"prepare-system"])
-        } else {
-            let path=destination.deletingLastPathComponent().appendingPathComponent(".music-manager-installer.lock")
-            try InstallationLocation.rejectLinks(path)
-            try fm.createDirectory(at:destination.deletingLastPathComponent(),withIntermediateDirectories:true)
-            targetLockFD=Darwin.open(path.path,O_RDONLY|O_NOFOLLOW)
-            if targetLockFD<0{targetLockFD=Darwin.open(path.path,O_CREAT|O_RDWR|O_NOFOLLOW,0o644)}
-            guard targetLockFD>=0,flock(targetLockFD,LOCK_EX|LOCK_NB)==0 else {
-                if targetLockFD>=0{Darwin.close(targetLockFD);targetLockFD = -1}
-                throw InstallError("目标应用已有安装事务或目录不可写，请返回原安装窗口或检查应用程序目录权限。")
-            }
+        let path=destination.deletingLastPathComponent().appendingPathComponent(".music-manager-installer.lock")
+        try InstallationLocation.rejectLinks(path)
+        try fm.createDirectory(at:destination.deletingLastPathComponent(),withIntermediateDirectories:true)
+        targetLockFD=Darwin.open(path.path,O_RDONLY|O_NOFOLLOW)
+        if targetLockFD<0{targetLockFD=Darwin.open(path.path,O_CREAT|O_RDWR|O_NOFOLLOW,0o644)}
+        if targetLockFD<0 && errno==EACCES {
+            // A standard user cannot create the lock in a protected folder. Installs still
+            // serialize through the session lock; only the launch guard is unavailable.
+            log("目标目录不可写，跳过启动保护锁：\(path.path)")
+            return
+        }
+        guard targetLockFD>=0,flock(targetLockFD,LOCK_EX|LOCK_NB)==0 else {
+            if targetLockFD>=0{Darwin.close(targetLockFD);targetLockFD = -1}
+            throw InstallError("目标应用正由另一个安装程序更新，请等待其完成后重试。")
         }
         targetLocked=true
     }
-    func releaseTargetLock() throws {
-        if !targetLocked{return}
-        if destination.path=="/Applications/声场档案.app" && systemChecks {try privilegedInstallerAction(["action":"release-target"])}
-        else if targetLockFD>=0{flock(targetLockFD,LOCK_UN);Darwin.close(targetLockFD);targetLockFD = -1}
+    func releaseTargetLock() {
+        if targetLockFD>=0{flock(targetLockFD,LOCK_UN);Darwin.close(targetLockFD);targetLockFD = -1}
         targetLocked=false
     }
     func validateReceipt(at location: URL? = nil) throws {
@@ -417,14 +464,12 @@ final class Installer {
         try data.write(to: runDirectory.appendingPathComponent("transaction.json"), options: .atomic)
     }
     func persistState(_ data: Data, name: String) throws {
-        if stateRoot.path == "/Library/Application Support/com.musicmanager.installer/system" {
-            try privilegedInstallerAction(["action":"write-state","name":name,"data":data.base64EncodedString()])
-        } else { try durableWrite(data, to:stateRoot.appendingPathComponent(name)) }
+        let path = stateRoot.appendingPathComponent(name)
+        try fm.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try durableWrite(data, to: path)
     }
     func archiveReceipt() throws {
         guard let r = receipt else { return }
-        let directory = stateRoot.appendingPathComponent("transactions")
-        if !stateRoot.path.hasPrefix("/Library/") { try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         try persistState(JSONEncoder().encode(r), name:"transactions/" + r.session + ".json")
     }
     func operation(_ executable: String, _ args: [String], writingTo directories: [URL]) throws {
@@ -439,7 +484,9 @@ final class Installer {
             }
             return !fm.isWritableFile(atPath: existing.path) || !fm.isExecutableFile(atPath: existing.path)
         }
-        if privileged && systemChecks && destination.path != "/Applications/声场档案.app" {throw InstallError("当前用户安装目录不可写，请修复目录权限或明确选择系统安装。")}
+        // The elevated worker manages only the system Applications folder; other locations
+        // are updated with the current user's permissions.
+        if privileged && systemChecks && destination.path != "/Applications/声场档案.app" {throw InstallError("安装目录不可写：\(destination.deletingLastPathComponent().path)。请修复目录权限后重试。")}
         _ = try io.run(executable, args, privileged: privileged)
     }
     var canRetry: Bool {
@@ -533,13 +580,13 @@ final class Installer {
             (["preparing", "replacing", "installed", "starting"].contains(r.phase) && fm.fileExists(atPath: r.backup) && !canSupersede(r, with: new)) {
             throw InstallError("上次更新尚未完成，请先在更新窗口恢复或处理旧版备份。当前应用继续运行。")
         }
-        let old = try AppInfo.read(migrationSources.first ?? destination, identifier: identifier)
+        let old = try AppInfo.read(destination, identifier: identifier)
         guard new.protocolVersion == 1, new.version.compare(old.version, options: .numeric) == .orderedDescending else {
             throw InstallError("更新包必须支持启动检测，且版本高于当前已安装版本。")
         }
     }
     func prepare() throws {
-        try acquireTargetLock()
+        try resumeSession()
         if cancelRequested(){throw InstallError("更新准备已取消")}
         if let error = recoveryError { throw InstallError(error) }
         try InstallationLocation.rejectLinks(destination)
@@ -581,11 +628,6 @@ final class Installer {
                 throw InstallError("已安装 \(old!.version)，安装包为 \(new.version)。普通更新不支持降级，请使用“恢复旧版”。")
             }
         }
-        var migrations = receipt?.migrationSources ?? []
-        for origin in migrationSources where origin != destination && !migrations.contains(where: {$0.path == origin.path}) {
-            migrations.append(try migrationIdentity(origin, maximumVersion: new.version))
-        }
-        for record in migrations where fm.fileExists(atPath: record.path) { try validateMigration(record) }
         let session = UUID().uuidString
         let parent = destination.deletingLastPathComponent()
         let previousTransaction=receipt?.session
@@ -597,7 +639,6 @@ final class Installer {
             diagnosticsSession: runDirectory.lastPathComponent,
             phase: "preparing", launched: false)
         receipt!.transactionId=downloadTransaction ?? session
-        receipt!.migrationSources=migrations
         receipt!.previousTransaction=previousTransaction
         if old != nil {receipt!.previousDigest=try executableDigest(destination)}
         if let bytes=try? Data(contentsOf:source.appendingPathComponent("Contents/MacOS/music-manager")) {receipt!.packageDigest=SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()}
@@ -647,10 +688,6 @@ final class Installer {
         let backupParent = URL(fileURLWithPath: r.backup).deletingLastPathComponent()
         do {
             progress("正在退出旧应用并安全替换…")
-            for origin in r.migrationSources ?? [] {
-                try validateMigration(origin)
-                try io.stopApplication(at: URL(fileURLWithPath: origin.path))
-            }
             try io.stopApplication(at: destination)
             receipt!.phase = "replacing"; try save()
             if r.previousVersion != nil {
@@ -667,7 +704,7 @@ final class Installer {
         }
     }
     func cleanupCommitted() throws {
-        try acquireTargetLock()
+        try resumeSession()
         guard let r = receipt, r.phase == "completed", r.startupOutcome != nil else { return }
         try validateReceipt()
         do {
@@ -684,42 +721,10 @@ final class Installer {
                 try operation("/bin/rm", ["-rf",parent.path], writingTo:[parent.deletingLastPathComponent()])
             }
             try cleanupSuperseded(r.previousTransaction)
-            for origin in r.migrationSources ?? [] where fm.fileExists(atPath: origin.path) {
-                try validateMigration(origin)
-                if systemChecks && NSRunningApplication.runningApplications(withBundleIdentifier: identifier).contains(where: {
-                    !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath() == URL(fileURLWithPath: origin.path).resolvingSymlinksInPath()
-                }) { throw InstallError("旧应用仍在运行，安装已成功，稍后重试清理。") }
-                // Never pass an arbitrary legacy path to the privileged worker.
-                _ = try io.run("/bin/rm", ["-rf", origin.path], privileged: false)
-            }
             receipt!.cleanupPending = false; receipt!.lastError = nil; try save()
         } catch {
             receipt!.cleanupPending = true; receipt!.lastError = error.localizedDescription; try? save()
             throw error
-        }
-    }
-    private func migrationIdentity(_ origin: URL, maximumVersion: String) throws -> MigratedApplication {
-        try InstallationLocation.rejectLinks(origin)
-        // Foundation rewrites /private/tmp to /tmp; that system alias is not an unsafe source.
-        guard origin.path.hasPrefix("/"), !origin.pathComponents.contains(".."), origin.lastPathComponent == Self.appName,
-              origin != destination, origin != source,
-              !origin.path.hasPrefix("/Volumes/"), !origin.pathComponents.contains("target"),
-              !origin.pathComponents.dropLast().contains(where: {$0.hasSuffix(".app")}),
-              !origin.path.hasPrefix(destination.path + "/"), !destination.path.hasPrefix(origin.path + "/") else {
-            throw InstallError("旧应用迁移来源无效，已停止操作。")
-        }
-        let info = try AppInfo.read(origin, identifier: identifier)
-        guard info.version.compare(maximumVersion, options: .numeric) != .orderedDescending else {throw InstallError("旧位置存在更高版本，已停止降级。")}
-        try validateForRemoval(origin, version: info.version)
-        let attrs = try fm.attributesOfItem(atPath: origin.path)
-        guard attrs[.type] as? FileAttributeType == .typeDirectory,
-              let device = attrs[.systemNumber] as? NSNumber, let inode = attrs[.systemFileNumber] as? NSNumber else {throw InstallError("无法确认旧应用文件身份。")}
-        return MigratedApplication(path: origin.path, version: info.version, digest: try executableDigest(origin), device: device.uint64Value, inode: inode.uint64Value)
-    }
-    private func validateMigration(_ record: MigratedApplication) throws {
-        let current = try migrationIdentity(URL(fileURLWithPath:record.path), maximumVersion:record.version)
-        guard current.version == record.version, current.digest == record.digest, current.device == record.device, current.inode == record.inode else {
-            throw InstallError("旧应用在更新期间发生变化，已保留该副本，请检查后重试。")
         }
     }
     private func cleanupSuperseded(_ first:String?) throws {
@@ -747,7 +752,7 @@ final class Installer {
         }
     }
     func launch(timeout: TimeInterval = 45) throws -> StartupResult {
-        try acquireTargetLock()
+        try resumeSession()
         try resumePublishedReplacement()
         guard let r = receipt, canRetry else { throw InstallError("请先完成安装或恢复旧版。") }
         _ = try verify(destination, expected: r.version)
@@ -790,7 +795,7 @@ final class Installer {
                         receipt!.cleanupPending = true; try save()
                         do { try cleanupCommitted(); progress(result.message) }
                         catch { progress(result.message + "\n安装成功；清理尚未完成，可稍后重试。") }
-                        try releaseTargetLock()
+                        releaseTargetLock()
                         return result
                     }
                     if firstResult?.0 != result { firstResult = (result, Date()) }
@@ -804,7 +809,7 @@ final class Installer {
         }
     }
     func restore() throws {
-        try acquireTargetLock()
+        try resumeSession()
         if receipt?.phase == "completed", receipt?.formatVersion == 2, receipt?.startupOutcome != nil {throw InstallError("安装已确认成功，旧版不再用于恢复。请使用修复安装。 ")}
         guard let r = receipt else { throw InstallError("没有可恢复的旧版备份。") }
         try validateReceipt()
@@ -822,7 +827,7 @@ final class Installer {
             if r.phase == "restoring" { _ = try verify(destination, expected: previous, allowTranslatedBackup: true) }
             receipt!.phase = "restored"; try save()
             progress("已确认旧版 \(previous) 恢复完成。音乐库未被替换。")
-            try releaseTargetLock()
+            releaseTargetLock()
             return
         }
         let backupInfo = try AppInfo.read(backup, identifier: identifier)
@@ -870,7 +875,7 @@ final class Installer {
         try operation("/bin/mv", [r.backup, destination.path], writingTo: [backup.deletingLastPathComponent(), parent])
         receipt!.phase = "restored"; try save()
         progress("已恢复旧版 \(backupInfo.version)。音乐库未被替换。请从应用程序中打开声场档案。")
-        try releaseTargetLock()
+        releaseTargetLock()
     }
     func historicalResidue() -> [URL] {
         var records:[InstallReceipt]=[]
@@ -904,6 +909,7 @@ final class Installer {
         }
     }
     func maintainEvidence(now:Date=Date()) throws {
+        try resumeSession()
         var protected=Set([runDirectory.lastPathComponent,receipt?.diagnosticsSession ?? "",receipt?.session ?? ""])
         for entry in (try? fm.contentsOfDirectory(at:stateRoot.appendingPathComponent("transactions"),includingPropertiesForKeys:nil)) ?? [] {
             guard (try? InstallationLocation.rejectLinks(entry)) != nil,let data=try? Data(contentsOf:entry),let old=try? JSONDecoder().decode(InstallReceipt.self,from:data) else{continue}
@@ -931,9 +937,7 @@ final class Installer {
                   record.destination==destination.path else{return false}
             return record.finished && record.cleanupPending != true && record.session != receipt?.session
         }.sorted{((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)}
-        if stateRoot.path.hasPrefix("/Library/") {try privilegedInstallerAction(["action":"prune-state"])}
-        // System records are pruned only by the bounded elevated worker.
-        for entry in terminal.dropLast(20) where !stateRoot.path.hasPrefix("/Library/") {try InstallationLocation.rejectLinks(entry);try fm.removeItem(at:entry)}
+        for entry in terminal.dropLast(20) {try InstallationLocation.rejectLinks(entry);try fm.removeItem(at:entry)}
     }
     func exportDiagnostics(to output: URL) throws {
         // Export only this installer session plus the most recent transaction.
@@ -984,6 +988,7 @@ final class Installer {
             try data.write(to: bundle.appendingPathComponent(newest.lastPathComponent))
         }
         try "系统：\(ProcessInfo.processInfo.operatingSystemVersionString)\n诊断文件可能包含本机路径和系统崩溃报告，请仅发给你信任的开发者。\n".write(to: bundle.appendingPathComponent("说明.txt"), atomically: true, encoding: .utf8)
+        try installerProcessSummary(installerBundleIdentifier).write(to: bundle.appendingPathComponent("安装窗口.txt"), atomically: true, encoding: .utf8)
         _ = try io.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", bundle.path, output.path], privileged: false)
     }
 }
@@ -1004,6 +1009,8 @@ func exportUpdateFailure(_ message: String, installer: Installer?, logRoot: URL)
         defer { try? FileManager.default.removeItem(at: bundle) }
         try durableWrite(Data(message.utf8), to: bundle.appendingPathComponent("error.txt"))
         try durableWrite(Data("系统：\(ProcessInfo.processInfo.operatingSystemVersionString)\n安装器初始化失败；未收集音乐库或音频。".utf8), to: bundle.appendingPathComponent("说明.txt"))
+        // Lock conflicts are the common initialization failure; record who holds it.
+        try durableWrite(Data(installerProcessSummary(Bundle.main.bundleIdentifier ?? "com.musicmanager.installer").utf8), to: bundle.appendingPathComponent("安装窗口.txt"))
         _ = try SystemIO(log: {_ in}).run("/usr/bin/ditto", ["-c", "-k", "--keepParent", bundle.path, output.path])
     }
     return output
@@ -1011,67 +1018,14 @@ func exportUpdateFailure(_ message: String, installer: Installer?, logRoot: URL)
 
 // The elevated process accepts a closed set of installer actions, never arbitrary shell text.
 // It does not launch the application or open its music library.
-private var workerOwnedLock:Int32 = -1
+// Used only when the current user cannot write /Applications. Installation state stays per user.
 func runInstallerWorker(_ arguments: [String]) throws {
     guard geteuid() == 0, arguments.count == 1,
           let data = Data(base64Encoded: arguments[0]),
           let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let action = request["action"] as? String else { throw InstallError("提权请求无效") }
-    let fm = FileManager.default
     let target = URL(fileURLWithPath: "/Applications/声场档案.app")
-    let state = URL(fileURLWithPath: "/Library/Application Support/com.musicmanager.installer/system")
-    try InstallationLocation.rejectLinks(target); try InstallationLocation.rejectLinks(state)
-    if action == "prepare-system" {
-        try fm.createDirectory(at: state, withIntermediateDirectories: true, attributes: [.posixPermissions:0o755])
-        for directory in [state.deletingLastPathComponent(),state] {
-            let attrs=try fm.attributesOfItem(atPath:directory.path)
-            guard (attrs[.ownerAccountID] as? NSNumber)?.uint32Value==0,((attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o022 == 0 else{throw InstallError("系统安装状态目录权限异常")}
-        }
-        let lock = state.appendingPathComponent("target.lock")
-        try InstallationLocation.rejectLinks(lock)
-        let fd = Darwin.open(lock.path, O_CREAT | O_RDONLY | O_NOFOLLOW, 0o644)
-        guard fd >= 0 else { throw InstallError("无法创建系统安装锁") }; Darwin.close(fd)
-        let attrs=try fm.attributesOfItem(atPath:lock.path)
-        guard (attrs[.ownerAccountID] as? NSNumber)?.uint32Value==0,((attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o022 == 0 else{throw InstallError("系统安装锁权限异常")}
-        if workerOwnedLock<0 {
-            let fd=Darwin.open(lock.path,O_RDONLY|O_NOFOLLOW)
-            guard fd>=0,flock(fd,LOCK_EX|LOCK_NB)==0 else{if fd>=0{Darwin.close(fd)};throw InstallError("另一账户或安装窗口正在更新目标应用")}
-            workerOwnedLock=fd
-        }
-        return
-    }
-    if action=="release-target" {
-        if workerOwnedLock>=0{flock(workerOwnedLock,LOCK_UN);Darwin.close(workerOwnedLock);workerOwnedLock = -1}
-        return
-    }
-    guard workerOwnedLock>=0 else{throw InstallError("系统安装操作尚未持有目标锁")}
-    if action == "prune-state" {
-        let directory=state.appendingPathComponent("transactions")
-        try InstallationLocation.rejectLinks(directory)
-        let current=(try? Data(contentsOf:state.appendingPathComponent("latest.json"))).flatMap{try? JSONDecoder().decode(InstallReceipt.self,from:$0)}
-        let files=(try? fm.contentsOfDirectory(at:directory,includingPropertiesForKeys:[.contentModificationDateKey])) ?? []
-        let terminal=files.filter{path in
-            guard UUID(uuidString:path.deletingPathExtension().lastPathComponent) != nil,path.pathExtension=="json",(try? InstallationLocation.rejectLinks(path)) != nil,
-                  let data=try? Data(contentsOf:path),let r=try? JSONDecoder().decode(InstallReceipt.self,from:data),r.destination==target.path,
-                  r.session==path.deletingPathExtension().lastPathComponent,r.session != current?.session else{return false}
-            return (r.finished || r.phase=="superseded") && r.cleanupPending != true
-        }.sorted{((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)}
-        for path in terminal.dropLast(20){try fm.removeItem(at:path)}
-        return
-    }
-    if action == "write-state" {
-        guard let name = request["name"] as? String,
-              name == "latest.json" || name == "previous.json" || (name.hasPrefix("transactions/") && UUID(uuidString: String(name.dropFirst(13).dropLast(5))) != nil && name.hasSuffix(".json")),
-              let encoded = request["data"] as? String, let bytes = Data(base64Encoded: encoded),
-              let receipt = try? JSONDecoder().decode(InstallReceipt.self, from: bytes),
-              receipt.destination == target.path, UUID(uuidString: receipt.session) != nil,
-              receipt.backup == "/Applications/.music-manager-backups/\(receipt.session)/声场档案.app",
-              receipt.staging == "/Applications/.music-manager-stage-\(receipt.session).app" else { throw InstallError("系统事务记录无效") }
-        let path = state.appendingPathComponent(name)
-        try InstallationLocation.rejectLinks(path)
-        try fm.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true, attributes:[.posixPermissions:0o755])
-        try durableWrite(bytes, to:path); return
-    }
+    try InstallationLocation.rejectLinks(target)
     guard action == "file-operation", let executable = request["executable"] as? String,
           let args = request["arguments"] as? [String] else { throw InstallError("未知提权操作") }
     func managed(_ path: String, includeTarget: Bool = false) -> Bool {

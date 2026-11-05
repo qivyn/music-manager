@@ -383,3 +383,17 @@ Tauri CLI 2.11.4 使用按系统、架构和 CLI 版本划分的独立缓存，�
 新增 `node --test scripts/test-ci-workflow.cjs`，直接执行工作流条件与 CLI 准备脚本：修复前 5 通过 / 9 失败，修改后 14 通过 / 0 失败。完整回归实际结果：Node 226、Python 22、Rust 70、Swift 安装器 79 项全部通过、0 失败；两个前端语法检查、`actionlint .github/workflows/ci.yml`、Ruby YAML 解析与 `git diff --check` 均通过。本次仅工作流/测试/说明变化，不重复实际 App 安装升级；已有 v0.2.8 App/DMG 构建和隔离窗口证据继续适用。
 
 前一提交 `74af477` 的 [PR CI](https://github.com/qivyn/music-manager/actions/runs/41767484149) 已确认 Linux 测试、Apple Silicon 后端/安装器及 arm64 DMG 构建成功。新规则的 PR 跳过行为以推送后运行核验；CLI 缓存实际命中与 main 发布路径尚需后续构建运行确认，不将本地模拟写成线上实测。
+
+## 2026-11-05：原地更新、按用户记录与安装锁
+
+起因：0.2.6 → 0.2.9 应用内更新时，一个仍打开的 0.2.6 DMG 安装窗口在整个生命周期持有 `~/Library/Logs/com.musicmanager.installer/installer.lock`，更新程序先请求管理员密码，再报“另一个安装窗口正在工作”，诊断 ZIP 只含错误文本。
+
+规则调整（按用户决定）：首次安装到 `/Applications`；已有安装原地更新；安装记录只按用户保存，不做跨账户兼容；其他副本只提示不删除。移除迁移、系统状态目录与对应提权动作；提权仅在目标目录不可写时用于 `/Applications` 内的固定文件操作。
+
+锁：会话锁先于日志目录与任何授权获取，持有者写入 PID；安装窗口仅在操作期间持锁，恢复操作时重读事务记录。主应用交接前检查该锁并提示持有进程。
+
+验证（本轮执行）：`bash scripts/test-macos-installer.sh` 86 项通过；`cargo test --locked --lib` 77 项通过；`node --test scripts/test-*.cjs` 271 项通过；`python3 scripts/test-local-update.py` 12 项通过；`-D INSTALLER_UI_TESTS` 编译通过。未做：本地 `--local-update-test` 原生窗口验收、真实 `/Applications` 提权、Intel 与跨账户。已发布的 0.2.9 安装器不受本次修改影响，需发版后生效。
+
+补充：0.2.8/0.2.9 将从线上撤回，主应用不再读取 `/Library/Application Support/com.musicmanager.installer/system`；本地更新测试移除 `SystemApplications` 迁移目录。
+
+原生验收（本轮执行）：`cargo tauri dev --no-watch -- -- --local-update-test --from-version 0.2.6`，隔离目录 `/private/tmp/music-manager-desktop-local-zvp0vyry`。0.2.6 测试 App 经应用内更新在原 `Applications` 中替换为当前源码构建（版本号仍为 0.2.9）；未启动提权执行器；新版以协议 2 回报 `ready`，事务 `completed`、`cleanupPending=false`，旧版备份与下载缓存已清理；0.2.6 的 Logs 记录归档到用户状态 `transactions`；测试库曲目、片段与标签保留。

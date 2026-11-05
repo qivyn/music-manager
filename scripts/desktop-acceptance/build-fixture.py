@@ -80,7 +80,7 @@ text = text.replace('https://github.com/qivyn/music-manager/releases/download', 
 text = text.replace('app.path().app_cache_dir().map_err(|e| e.to_string())?', 'PathBuf::from(' + json.dumps(str(root / 'cache')) + ')')
 text = text.replace('let logs=app.path().home_dir().map_err(|e|e.to_string())?.join("Library/Logs").join(id);',
                     'let logs=PathBuf::from(' + json.dumps(str(root / 'logs')) + ');')
-state_pattern='vec![PathBuf::from("/Library/Application Support/com.musicmanager.installer/system"),home.join("Library/Application Support/com.musicmanager.installer/user")]'
+state_pattern='vec![home.join("Library/Application Support/com.musicmanager.installer/user")]'
 state_pattern=state_pattern.replace('com.musicmanager.installer',identifier+'.installer')
 text = text.replace(state_pattern,'vec![PathBuf::from(' + json.dumps(str(root / 'logs/state')) + ')]')
 if 'fn installer_state_roots' in text:

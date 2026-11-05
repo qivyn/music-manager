@@ -182,64 +182,57 @@ do {
     }
     for oldVersion in ["0.2.6", "0.2.7"] {
     for phase in ["completed", "restored", "failed_before_replace"] {
-        try test("\(oldVersion) personal receipt stays in legacy evidence when updating to 0.2.8: \(phase)") {
-            let f = try Fixture(old: nil, new: "0.2.8")
+        try test("\(oldVersion) personal receipt allows an in-place update: \(phase)") {
+            let f = try Fixture(old: oldVersion, new: "0.2.10")
             f.engine = nil
-            let personal = f.root.appendingPathComponent("PersonalApplications/声场档案.app")
-            try f.app(personal, version: oldVersion, schema: 3)
             let session = UUID().uuidString
-            let parent = personal.deletingLastPathComponent()
+            let parent = f.destination.deletingLastPathComponent()
             // Exact v0.2.7 record shape: none of the v2 optional fields exist.
             let bytes = try JSONSerialization.data(withJSONObject: [
-                "session": session, "destination": personal.path,
+                "session": session, "destination": f.destination.path,
                 "backup": parent.appendingPathComponent(".music-manager-backups/\(session)/声场档案.app").path,
                 "staging": parent.appendingPathComponent(".music-manager-stage-\(session).app").path,
                 "version": oldVersion, "previousVersion": "0.2.5", "previousSchema": 3,
                 "diagnosticsSession": UUID().uuidString, "phase": phase, "launched": true
             ])
-            let legacy = f.logs.appendingPathComponent("latest.json")
-            try durableWrite(bytes, to: legacy)
-            let state = f.root.appendingPathComponent("system-state")
+            try durableWrite(bytes, to: f.logs.appendingPathComponent("latest.json"))
+            let state = f.root.appendingPathComponent("user-state")
             f.engine = try Installer(source: f.source, destination: f.destination, logRoot: f.logs,
                                      io: f.io, systemChecks: false, stateRoot: state)
-            try check(f.engine!.recoveryError == nil && f.engine!.receipt == nil, "completed personal receipt blocked update")
-            let archive = f.logs.appendingPathComponent("transactions/\(session).json")
-            try check(fm.fileExists(atPath: archive.path), "personal receipt was incorrectly archived into system state")
-            try check(try Data(contentsOf: archive) == bytes, "legacy evidence was rewritten")
-            try check(!fm.fileExists(atPath: state.appendingPathComponent("transactions").path), "personal record crossed system state boundary")
-            try check(!fm.fileExists(atPath: legacy.path), "archived receipt remained active")
-            f.engine!.migrationSources = [personal]
-            try f.engine!.validateInAppUpdate(version: "0.2.8")
+            try check(f.engine!.recoveryError == nil && f.engine!.receipt?.session == session, "legacy receipt for this copy was not read")
+            try f.engine!.validateInAppUpdate(version: "0.2.10")
             try f.engine!.install()
-            try check(try AppInfo.read(f.destination).version == "0.2.8", "migration did not install new app")
-            try check(fm.fileExists(atPath: personal.path), "old app removed before startup")
-            let current = try JSONDecoder().decode(InstallReceipt.self, from: Data(contentsOf: state.appendingPathComponent("latest.json")))
-            try check(current.destination == f.destination.path, "system record has wrong destination")
-            try f.readyExecutable(version: "0.2.8")
+            try check(try AppInfo.read(f.destination).version == "0.2.10", "in-place update did not install new app")
+            try check(try AppInfo.read(URL(fileURLWithPath: f.engine!.receipt!.backup)).version == oldVersion, "old app not kept as backup")
+            let archived = try Data(contentsOf: state.appendingPathComponent("transactions/\(session).json"))
+            try check(try JSONDecoder().decode(InstallReceipt.self, from: archived).phase == phase, "legacy transaction lost")
+            try f.readyExecutable(version: "0.2.10")
             try check(try f.engine!.launch(timeout: 3) == .ready, "new app did not confirm startup")
-            try check(!fm.fileExists(atPath: personal.path), "verified legacy app remained after startup")
-            try check(try Data(contentsOf: archive) == bytes, "migration removed historical evidence")
+            try check(!fm.fileExists(atPath: f.engine!.receipt!.backup), "confirmed update kept the old app")
             try f.verifyLibrary()
         }
     }
     }
-    try test("a foreign receipt in dedicated state is rejected without touching either record") {
+    try test("a finished receipt of another copy in user state is archived, not applied") {
         let f = try Fixture(); try f.engine!.install()
-        f.engine!.receipt!.phase = "completed"; try f.engine!.save(); f.engine = nil
-        let legacy = f.logs.appendingPathComponent("latest.json")
-        let bytes = try Data(contentsOf: legacy)
-        let state = f.root.appendingPathComponent("system-state")
+        f.engine!.receipt!.phase = "completed"; try f.engine!.save()
+        let previous = f.engine!.receipt!; f.engine = nil
+        let bytes = try Data(contentsOf: f.logs.appendingPathComponent("latest.json"))
+        let state = f.root.appendingPathComponent("user-state")
         try fm.createDirectory(at: state, withIntermediateDirectories: true)
         try durableWrite(bytes, to: state.appendingPathComponent("latest.json"))
-        let moved = f.root.appendingPathComponent("OtherApplications/声场档案.app")
-        f.engine = try Installer(source: f.source, destination: moved, logRoot: f.logs,
+        let other = f.root.appendingPathComponent("OtherApplications/声场档案.app")
+        try f.app(other, version: "0.2.5", schema: 3)
+        f.engine = try Installer(source: f.source, destination: other, logRoot: f.logs,
                                  io: f.io, systemChecks: false, stateRoot: state)
-        try check(f.engine!.recoveryError != nil, "foreign system state was discarded")
-        try check(try Data(contentsOf: legacy) == bytes, "legacy record changed")
-        try check(try Data(contentsOf: state.appendingPathComponent("latest.json")) == bytes, "dedicated record changed")
+        try check(f.engine!.recoveryError == nil && f.engine!.receipt == nil, "another copy's history blocked this copy")
+        try check(try Data(contentsOf: state.appendingPathComponent("transactions/\(previous.session).json")) == bytes, "history rewritten")
+        try f.engine!.install()
+        try check(try AppInfo.read(other).version == "0.2.6", "this copy was not updated in place")
+        try check(try AppInfo.read(f.destination).version == "0.2.6", "the other copy was modified")
         try f.verifyLibrary()
     }
-    try test("legacy archive failure retains the active receipt and blocks migration") {
+    try test("legacy archive failure retains the active receipt and blocks the update") {
         let f = try Fixture(); try f.engine!.install()
         f.engine!.receipt!.phase = "completed"; try f.engine!.save(); f.engine = nil
         let legacy = f.logs.appendingPathComponent("latest.json")
@@ -247,32 +240,38 @@ do {
         try fm.createSymbolicLink(at: f.logs.appendingPathComponent("transactions"), withDestinationURL: f.sentinel.deletingLastPathComponent())
         let moved = f.root.appendingPathComponent("OtherApplications/声场档案.app")
         f.engine = try Installer(source: f.source, destination: moved, logRoot: f.logs,
-                                 io: f.io, systemChecks: false, stateRoot: f.root.appendingPathComponent("system-state"))
-        try check(f.engine!.recoveryError != nil, "unsafe archive allowed migration")
+                                 io: f.io, systemChecks: false, stateRoot: f.root.appendingPathComponent("user-state"))
+        try check(f.engine!.recoveryError != nil, "unsafe archive allowed the update")
         try check(try Data(contentsOf: legacy) == bytes, "archive failure discarded recovery evidence")
         try f.verifyLibrary()
     }
-    try test("migration accepts the macOS private tmp system alias") {
-        let f=try Fixture(old:nil)
-        let root=URL(fileURLWithPath:"/private/tmp/mm-migration-alias-"+UUID().uuidString)
-        defer {try? fm.removeItem(at:root)}
-        let old=root.appendingPathComponent("声场档案.app")
-        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old]
-        try f.engine!.prepare()
-        try check(fm.fileExists(atPath:old.path),"source was removed during preparation")
-    }
-    try test("legacy location survives preparation and failure then is removed only after confirmed startup") {
-        let f=try Fixture(old:nil)
-        let legacy=f.root.appendingPathComponent("old-location/声场档案.app")
-        try f.app(legacy,version:"0.2.5",schema:3)
-        f.engine!.migrationSources=[legacy]
+    try test("an idle installer releases its lock and rereads the journal before acting") {
+        let f = try Fixture()
+        f.engine!.releaseSession()
+        let other = try Installer(source: f.source, destination: f.destination, logRoot: f.logs, io: f.io, systemChecks: false)
+        try other.prepare()
+        try fails("holder still active") { try f.engine!.install() }
+        try check(f.io.copies == 1, "blocked installer copied a payload")
+        let session = other.receipt!.session
+        other.releaseSession()
+        try f.engine!.resumeSession()
+        try check(f.engine!.receipt?.session == session && f.engine!.receipt?.phase == "prepared", "stale journal used after another installer")
         try f.engine!.install()
-        try check(fm.fileExists(atPath:legacy.path),"legacy removed before confirmation")
-        try f.reopen()
-        try f.readyExecutable(version:"0.2.6")
-        _ = try f.engine!.launch(timeout:5)
-        try check(!fm.fileExists(atPath:legacy.path),"confirmed relocation left original application")
+        try check(f.io.copies == 1, "resumed installer duplicated the prepared stage")
+        try check(try AppInfo.read(f.destination).version == "0.2.6", "resumed installer did not install")
         try f.verifyLibrary()
+    }
+    try test("a lock conflict fails before creating logs and names the holding process") {
+        let f = try Fixture()
+        let before = try fm.contentsOfDirectory(atPath: f.logs.path).count
+        try fails("second installer") { _ = try Installer(source: f.source, destination: f.destination, logRoot: f.logs, io: f.io, systemChecks: false) }
+        try check(try fm.contentsOfDirectory(atPath: f.logs.path).count == before, "failed installer left a run directory")
+        try check(f.io.operations.isEmpty, "failed installer ran an operation")
+        let sleeper = Process(); sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep"); sleeper.arguments = ["5"]
+        try sleeper.run(); defer { sleeper.terminate() }
+        let message = busyInstallerMessage(recorded: sleeper.processIdentifier, bundleIdentifier: "com.musicmanager.installertest")
+        try check(message.contains("进程 \(sleeper.processIdentifier)") && message.contains("⌘Q"), "message does not identify the holder")
+        try check(!busyInstallerMessage(recorded: getpid(), bundleIdentifier: "com.musicmanager.installertest").contains("进程"), "message named the asking process")
     }
     try test("log rotation preserves unknown directories and removes only owned expired runs") {
         let f=try Fixture();let oldRun=f.engine!.runDirectory
@@ -285,43 +284,6 @@ do {
         try check(fm.fileExists(atPath:unknown.appendingPathComponent("notes").path),"unknown log directory deleted")
         try check(!fm.fileExists(atPath:oldRun.path),"owned expired log retained")
         try f.verifyLibrary()
-    }
-    try test("failed migration keeps legacy application and user data") {
-        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
-        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];f.io.failCopy=true
-        try fails("copy failure"){try f.engine!.install()}
-        try check(fm.fileExists(atPath:old.path),"failed migration deleted old app");try f.verifyLibrary()
-    }
-    try test("migration rejects replaced source before deleting and records cleanup retry") {
-        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
-        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
-        try Data("changed executable".utf8).write(to:old.appendingPathComponent("Contents/MacOS/music-manager"))
-        try f.readyExecutable(version:"0.2.6");_ = try f.engine!.launch(timeout:5)
-        try check(f.engine!.receipt!.phase=="completed" && f.engine!.receipt!.cleanupPending==true,"cleanup error rolled back success")
-        try check(fm.fileExists(atPath:old.path),"changed old app was removed");try f.verifyLibrary()
-    }
-    try test("migration rejects symlink unknown identity and newer legacy version") {
-        for mode in ["symlink","identity","newer"] {
-            let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
-            try f.app(old,version:mode=="newer" ? "0.2.9" : "0.2.5",schema:3)
-            if mode=="identity" {try Data("invalid".utf8).write(to:old.appendingPathComponent("Contents/Info.plist"))}
-            if mode=="symlink" {try fm.removeItem(at:old);try fm.createSymbolicLink(at:old,withDestinationURL:f.source)}
-            f.engine!.migrationSources=[old];try fails(mode){try f.engine!.prepare()};try f.verifyLibrary()
-        }
-    }
-    try test("migration cleanup can resume after source was removed before state save") {
-        let f=try Fixture(old:nil);let old=f.root.appendingPathComponent("Legacy/声场档案.app")
-        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
-        f.engine!.receipt!.phase="completed";f.engine!.receipt!.startupOutcome="ready";f.engine!.receipt!.cleanupPending=true;try f.engine!.save()
-        try fm.removeItem(at:old);try f.reopen();try f.engine!.cleanupCommitted()
-        try check(f.engine!.receipt!.cleanupPending==false,"cleanup did not resume");try f.verifyLibrary()
-    }
-    try test("existing system installation and legacy source are both preserved until commit") {
-        let f=try Fixture();let old=f.root.appendingPathComponent("Legacy/声场档案.app")
-        try f.app(old,version:"0.2.5",schema:3);f.engine!.migrationSources=[old];try f.engine!.install()
-        try check(fm.fileExists(atPath:old.path) && fm.fileExists(atPath:f.engine!.receipt!.backup),"early removal")
-        try f.readyExecutable(version:"0.2.6");_ = try f.engine!.launch(timeout:5)
-        try check(!fm.fileExists(atPath:old.path) && !fm.fileExists(atPath:f.engine!.receipt!.backup),"committed copies remain")
     }
     try test("preparation stages before requesting exit and does not replace target") {
         let f=try Fixture();f.engine!.downloadTransaction="update-shared";try f.engine!.prepare()

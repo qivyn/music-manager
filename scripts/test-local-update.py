@@ -76,7 +76,7 @@ class LocalUpdateTests(unittest.TestCase):
 
     def test_unknown_application_is_not_removed_during_reset(self):
         state, _ = self.fixture()
-        foreign = state.root / 'SystemApplications/声场档案.app/Contents'
+        foreign = state.root / 'Applications/声场档案.app/Contents'
         foreign.mkdir(parents=True)
         with (foreign / 'Info.plist').open('wb') as out:
             plistlib.dump({'CFBundleIdentifier': 'unrelated.app'}, out)
@@ -101,7 +101,7 @@ class LocalUpdateTests(unittest.TestCase):
 
     def test_nested_unknown_application_is_not_removed(self):
         state, _ = self.fixture()
-        foreign = state.root / 'SystemApplications/.music-manager-backups/unknown/Other.app/Contents'
+        foreign = state.root / 'Applications/.music-manager-backups/unknown/Other.app/Contents'
         foreign.mkdir(parents=True)
         with (foreign / 'Info.plist').open('wb') as out:
             plistlib.dump({'CFBundleIdentifier': 'unrelated.app'}, out)
