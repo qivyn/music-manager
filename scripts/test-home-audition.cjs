@@ -4,13 +4,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const appSource = fs.readFileSync(path.join(__dirname, "../frontend/app.js"), "utf8");
+const appSource = require('./app-source.cjs').readAppSource();
 const turntableSource = fs.readFileSync(path.join(__dirname, "../frontend/turntable.js"), "utf8");
 const section = (source, start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const auditionSource = [
     section(appSource, "let playbackRequestVersion =", "async function loadAndPlay("),
     section(appSource, "let homeTracks =", "function setupHomeRecent("),
-    section(appSource, "async function swapToMusic(", "function renderTagResults("),
+    section(appSource, "async function swapToMusic(", "/* End home playback */"),
     section(appSource, "async function loadAndPlay(", "function onSegmentTimeupdate("),
     section(appSource, "async function playMusic(", "async function playClip("),
     section(appSource, "async function togglePlay()", "function clearPlayer()"),
@@ -42,7 +42,8 @@ function audition({ onInvoke = () => {}, failPlay = false } = {}) {
         toggle(name, enabled) { if (enabled) bodyClasses.add(name); else bodyClasses.delete(name); },
     };
     const context = {
-        console, state: { currentView: "home", player },
+        console, libraryRenderVersion: 0, libraryFilters: () => ({}), acceptLibraryPage: page => page,
+        state: { currentView: "home", player },
         document: { body: { classList } },
         window: { Turntable: {
             cancelMotion() { cancels++; },
@@ -55,12 +56,14 @@ function audition({ onInvoke = () => {}, failPlay = false } = {}) {
         flyRecordToStage() {}, skipBroken() { throw new Error("Explicit audition must not skip to another track"); },
         showToast: value => messages.push(value),
         dbGet: async (_store, id) => { reads.push(id); return library.find(item => item.id === id); },
-        dbGetAll: async store => store === "music" ? library.slice() : [],
         invoke: async (command, args) => {
             const result = await onInvoke(command, args);
+            if (command === "query_library_page" && result === undefined) return { items: library.slice(), total: library.length, page: 1, pageSize: 10, totalPages: 1 };
+            if (command === "query_music_neighbor" && result === undefined) return library[library.findIndex(m=>m.id===args.id)+args.direction] || null;
             return result ?? (command === "file_exists" ? true : null);
         },
     };
+    context.requestLibraryPage = query => context.invoke("query_library_page", { query });
     vm.createContext(context);
     vm.runInContext(auditionSource, context);
     context.tracks = tracks;
@@ -151,7 +154,7 @@ test("a workspace render refreshes the home queue after a library deletion", asy
     app.context.document.body.classList.toggle = () => {};
     app.context.updatePageHeader = () => {};
     app.context.renderClipLibrary = () => {};
-    vm.runInContext(section(appSource, "async function render()", "function goToViewFromHome("), app.context);
+    vm.runInContext(section(appSource, "async function render()", "/* End library render */"), app.context);
     await app.context.render();
     assert.deepEqual(Array.from(app.player.queue, item => item.id), ["m1", "m3"]);
     assert.equal(app.player.index, 0);
@@ -161,7 +164,7 @@ test("a workspace render refreshes the home queue after a library deletion", asy
 function enableWorkspaceRender(app) {
     app.context.updatePageHeader = () => {};
     app.context.renderClipLibrary = () => {};
-    vm.runInContext(section(appSource, "async function render()", "function goToViewFromHome("), app.context);
+    vm.runInContext(section(appSource, "async function render()", "/* End library render */"), app.context);
     app.context.state.currentView = "clips";
 }
 
@@ -231,10 +234,11 @@ test("closing the player during a queue refresh cannot restart playback", async 
     delete app.context.window.Turntable;
     await app.context.swapToMusic(tracks[0]);
     const read = deferred();
-    app.context.dbGetAll = () => read.promise;
+    const invoke = app.context.invoke;
+    app.context.invoke = (command,args) => command === "query_music_neighbor" ? read.promise : invoke(command,args);
     const next = app.context.nextTrack();
     app.context.clearPlayer();
-    read.resolve(app.library);
+    read.resolve(app.library[1]);
     await next;
     assert.equal(app.player.music, null);
     assert.equal(app.audio.src, "");
@@ -411,6 +415,7 @@ test("cancelMotion cancels physical timers; reduced motion lands the stylus imme
         setTimeout: callback => { timers.set(++id, callback); return id; },
         clearTimeout: timer => timers.delete(timer),
     };
+    context.requestLibraryPage = query => context.invoke("query_library_page", { query });
     vm.createContext(context);
     vm.runInContext(section(turntableSource, "    function motionAfter(", "    /* 没装片时"), context);
     context.needleDropSequence(state, () => callbacks++);
@@ -437,6 +442,7 @@ test("late artwork and waveform responses cannot overwrite the selected record",
         Image: class { constructor() { images.push(this); } },
         miniSetCover() {}, drawRecord() {}, frame() {},
     };
+    context.requestLibraryPage = query => context.invoke("query_library_page", { query });
     vm.createContext(context);
     vm.runInContext(section(turntableSource, "    function setTrack(", "    function applyTheme("), context);
     context.setTrack({ title: "A", coverArt: "a", grooveUrl: "a" });
@@ -481,7 +487,8 @@ test("the redesigned turntable fills the stage while its visible surfaces stay i
             requestAnimationFrame: callback => { nextFrame = callback; return 1; }, cancelAnimationFrame() {},
             setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1,
         };
-        vm.createContext(context);
+        context.requestLibraryPage = query => context.invoke("query_library_page", { query });
+    vm.createContext(context);
         vm.runInContext(turntableSource.replace("    window.Turntable = {", "    window.inspectTurntable = () => S;\n    window.Turntable = {"), context);
         const container = { clientWidth: 1000, clientHeight: 400, appendChild(node) { node.parentElement = this; } };
         assert.equal(context.window.Turntable.mount(container), true);

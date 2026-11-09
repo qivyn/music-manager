@@ -8,7 +8,8 @@ const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const { createPreview } = require('../frontend/.preview/build-preview.cjs');
 
-const source = fs.readFileSync(path.join(__dirname, '../frontend/app.js'), 'utf8').replace(/\ninit\(\);\s*$/, '');
+const source = require('./app-source.cjs').readAppSource();
+const { createLibraryQuery } = require('../frontend/.preview/library-query.js');
 const clone = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(setImmediate);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -25,6 +26,7 @@ class Element {
     }
     get innerHTML() { return this.html || ''; }
     set innerHTML(value) { this.html = value; this.onHTML?.(value); }
+    insertAdjacentHTML(position, value) { this.innerHTML = position === 'afterbegin' ? value + this.innerHTML : this.innerHTML + value; }
     addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }
     removeEventListener(type, fn) { this.listeners.set(type, (this.listeners.get(type) || []).filter(item => item !== fn)); }
     async fire(type, props = {}) {
@@ -53,7 +55,7 @@ class Element {
     async play() { this.paused = false; this.plays.push(this.src); await this.fire('play'); }
 }
 
-function app({ onInvoke = async () => undefined, confirmed = true, renderImports = false } = {}) {
+function app({ onInvoke = async () => undefined, confirmed = true, renderImports = false, realRender = false } = {}) {
     const elements = new Map();
     const $ = id => { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); };
     // Materialize controls from the real detail template so field-sync assertions
@@ -74,13 +76,17 @@ function app({ onInvoke = async () => undefined, confirmed = true, renderImports
         // Materialize clip rows from the real template and model DOM removal.
         // Keep controls separate so a full detail rebuild loses their identity.
         const list = $('detailClipList');
-        let rows = [...html.matchAll(/class="clip-item"\s+data-clip-id="([^"]+)"/g)].map(match => {
-            const row = new Element(); row.dataset.clipId = match[1]; row.parentElement = list;
-            row.remove = () => { rows = rows.filter(item => item !== row); };
-            return row;
-        });
+        let rows = [];
+        const renderRows = markup => {
+            rows = [...markup.matchAll(/class="clip-item"\s+data-clip-id="([^"]+)"/g)].map(match => {
+                const row = new Element(); row.dataset.clipId = match[1]; row.parentElement = list;
+                row.remove = () => { rows = rows.filter(item => item !== row); };
+                return row;
+            });
+        };
+        renderRows(html);
         list.querySelectorAll = selector => selector === '.clip-item' ? [...rows] : [];
-        list.onHTML = () => { rows = []; };
+        list.onHTML = renderRows;
     };
     for (const id of ['importModal', 'editModal', 'shortcutsModal', 'clipEditorPanel', 'updateModal', 'detailPanel', 'musicClipsPanel']) $(id).classList.add('hidden');
     const tracks = [1, 2, 3].map(n => ({ id: `m${n}`, name: `Track ${n}`, artist: 'Before', path: `/music/${n}.mp3`, album: 'A',
@@ -88,6 +94,7 @@ function app({ onInvoke = async () => undefined, confirmed = true, renderImports
     const clips = [{ id: 'c1', musicId: 'm1', name: 'Clip', start: 10, end: 20, tags: [], tagIds: [] }];
     const tags = [{ id: 1, name: 'A', categoryId: 1 }, { id: 2, name: 'B', categoryId: 1 }, { id: 3, name: 'C', categoryId: 1 }];
     const albumTags = new Map([['A', [1, 2, 3]]]);
+    const queries = createLibraryQuery({ music: tracks, clips, tags });
     const calls = [], messages = [], rendered = [];
     let drop;
     const invoke = async (command, args = {}) => {
@@ -95,6 +102,21 @@ function app({ onInvoke = async () => undefined, confirmed = true, renderImports
         const custom = await onInvoke(command, args);
         if (custom !== undefined) return custom;
         switch (command) {
+            case 'query_library_page': {
+                const q = args.query;
+                if (q.kind === 'clips' && q.musicId) {
+                    // Existing concurrency scenarios delay the same clip read;
+                    // the transport now wraps only the requested SQL page.
+                    const custom = await onInvoke('list_clips_for_music', { musicId: q.musicId });
+                    if (custom !== undefined) {
+                        const page = queries.page(q);
+                        return { ...page, items: custom.map(clip => ({clip,music:tracks.find(m=>m.id===clip.musicId)})), total: custom.length };
+                    }
+                }
+                return clone(queries.page(q));
+            }
+            case 'library_related_ids': return queries.related(args.musicIds, args.album);
+            case 'query_music_neighbor': return clone(queries.neighbor(args.query,args.id,args.direction));
             case 'get_music': return clone(tracks.find(m => m.id === args.id) || null);
             case 'get_clip': return clone(clips.find(c => c.id === args.id) || null);
             case 'list_music': return clone(tracks);
@@ -157,12 +179,12 @@ function app({ onInvoke = async () => undefined, confirmed = true, renderImports
         dialog: { ask: async () => confirmed, message: async text => messages.push(text), open: async () => null },
         opener: { revealItemInDir: async () => {} }, window: { getCurrentWindow: () => ({ onDragDropEvent: async fn => { drop = fn; } }) } },
         addEventListener() {}, matchMedia: () => ({ matches: false }) };
-    const context = { console: { log() {}, error() {} }, window, document, localStorage: { getItem: () => null, setItem() {} },
+    const context = { AbortController, console: { log() {}, error() {} }, window, document, localStorage: { getItem: () => null, setItem() {} },
         setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame() {}, CSS: { escape: s => s }, alert: text => { throw new Error(text); },
         recordRender: () => rendered.push(true), recordMessage: text => messages.push(text) };
     vm.createContext(context); vm.runInContext(source, context);
     vm.runInContext(`state.currentView = 'all';
-        render = async () => recordRender(); renderSidebarTags = async () => {};
+        ${realRender ? '' : 'render = async () => recordRender();'} renderSidebarTags = async () => {};
         ${renderImports ? '' : 'renderSelectedFiles = async () => {};'} renderCandidatePanel = async () => {};
         renderFilterPanel = async () => {}; renderDetailTagSuggestions = async () => {};
         syncHomePlayback = () => {}; showToast = text => recordMessage(text);`, context);
@@ -251,7 +273,7 @@ test('confirmed discard closes the editor; an Event object never forces discard'
 });
 
 test('view next/previous keep the view queue even when candidates differ', async () => {
-    const a = app(); a.bind(); await a.run("(async()=>{visibleQueueMusic = await dbGetAll('music'); state.player.candidates=[{id:'m3',kind:'music'}]; await playMusic('m1');})()");
+    const a = app(); a.bind(); await a.run("(async()=>{visibleQueueMusic = (await requestLibraryPage({kind:'music'},'test')).items; state.player.candidates=[{id:'m3',kind:'music'}]; await playMusic('m1');})()");
     await a.run('nextTrack()'); await a.run('nextTrack()'); await a.run('prevTrack()');
     assert.equal(a.state.player.music.id, 'm2'); assert.equal(a.state.player.queueSource, 'view');
     assert.deepEqual(Array.from(a.state.player.queue, m => m.id), ['m1', 'm2', 'm3']);
@@ -284,7 +306,7 @@ test('a newer workspace selection wins an older file check', async () => {
 });
 
 test('native Tauri drag payload imports files and responds to over/leave', async () => {
-    const a = app({ onInvoke: cmd => cmd === 'scan_import_sources' ? [{ exists: true, path: '/new.mp3', name: 'New' }] : cmd === 'find_existing_music_paths' ? [] : undefined });
+    const a = app({ onInvoke: cmd => cmd === 'scan_import_sources' ? {items:[{ exists: true, path: '/new.mp3', name: 'New' }],warnings:[],cancelled:false} : cmd === 'find_existing_music_paths' ? [] : undefined });
     a.bind(); a.$('importModal').classList.remove('hidden');
     await a.drop({ event: 'tauri://drag-over', payload: { type: 'over' } }); assert(a.$('dropZone').classList.contains('dragover'));
     await a.drop({ event: 'tauri://drag-leave', payload: { type: 'leave' } }); assert(!a.$('dropZone').classList.contains('dragover'));
@@ -425,18 +447,19 @@ test('sidebar tag deletion refreshes album IDs before the next album edit', asyn
 });
 
 test('recent playback reads fresh history during the same session', async () => {
-    const a = app(); a.bind(); await a.run("dbGetAll('music')");
+    const a = app(); a.bind();
     a.state.player.music = await readMusic(a, 'm1'); a.state.currentView = 'recent'; a.state.recentMode = 'used';
     a.run('markCurrentTrackUsed()'); await tick();
-    const rows = await a.run("dbGetAll('music')"); const recent = await a.run("getCurrentMusicList(libraryCache.music,[])");
-    assert(rows.find(m => m.id === 'm1').lastPlayedAt); assert.deepEqual(Array.from(recent, m => m.id), ['m1']); assert(a.rendered.length > 0);
+    const page = await a.run("requestLibraryPage({kind:'music',recent:'used'},'recent-test')");
+    assert.equal(page.items[0].id, 'm1'); assert(page.items[0].lastPlayedAt);
 });
 
-test('an in-flight old list response cannot refill a cache invalidated by playback', async () => {
-    const wait = deferred(); let old = true; const a = app({ onInvoke: cmd => { if (cmd === 'list_music' && old) { old = false; return wait.promise; } } });
-    const staleRows = clone(a.tracks); const loading = a.run("dbGetAll('music')"); await tick();
-    a.state.player.music = await readMusic(a, 'm1'); a.run('markCurrentTrackUsed()'); await tick(); wait.resolve(staleRows);
-    const rows = await loading; assert(rows.find(m => m.id === 'm1').lastPlayedAt);
+test('an in-flight old page response is discarded after playback invalidates its revision', async () => {
+    const wait = deferred(); let old = true; const a = app({ onInvoke: cmd => { if (cmd === 'query_library_page' && old) { old = false; return wait.promise; } } });
+    const staleRows = clone(a.tracks); const loading = a.run("requestLibraryPage({kind:'music'},'test')"); await tick();
+    a.state.player.music = await readMusic(a, 'm1'); a.run('markCurrentTrackUsed()'); await tick();
+    wait.resolve({items:staleRows,total:3,page:1,pageSize:50,totalPages:1});
+    const page = await loading; assert(page.items.find(m => m.id === 'm1').lastPlayedAt);
 });
 
 test('preview generator injects the mock before app.js without requiring Three.js', () => {
@@ -676,7 +699,7 @@ for (const fail of [false, true]) {
         a.context.duration = path => { if (path === '/Y.mp3') { started.resolve(); return duration.promise; } return 180; };
         a.run("getAudioDuration=path=>duration(path); state.importFiles=['X','Y','Z'].map(name=>({name,path:'/'+name+'.mp3',fileName:name+'.mp3',album:'A',metadataAlbum:'A',folderAlbum:'Folder',albumSource:'metadata'}))");
         await a.run('renderSelectedFiles()'); assert(a.$('selectedFiles').innerHTML.includes('data-file-index="2"'));
-        const importing = a.run('importSelectedFiles()'); await started.promise;
+        const importing = a.run('importSelectedFiles()'); await started.promise; await tick();
         assert.deepEqual(Array.from(a.state.importFiles, m => m.name), ['Y', 'Z']);
         assert.equal(a.$('selectedFiles').inert, true); assert(a.radios.metadata.disabled); assert(a.radios.folder.disabled);
         // Simulate queued/synthetic events as well as the native inert control lock.
@@ -958,7 +981,7 @@ for (const source of ['workspace', 'home']) {
     test(`deleting the loaded track preserves a newer ${source} request for a surviving track`, async () => {
         const wait = deferred(), started = deferred(); let block = false;
         const a = app({ onInvoke: (cmd, args) => { if (block && cmd === 'file_exists' && args.path === '/music/2.mp3') { block = false; started.resolve(); return wait.promise; } } }); a.bind();
-        await a.run("(async()=>{visibleQueueMusic=await dbGetAll('music'); await playMusic('m1');})()");
+        await a.run("(async()=>{visibleQueueMusic=(await requestLibraryPage({kind:'music'},'test')).items; await playMusic('m1');})()");
         // Await the first play explicitly before delaying the replacement.
         await tick(); assert.equal(a.state.player.music?.id, 'm1'); block = true;
         if (source === 'home') a.run("state.currentView='home'; homeTracks=visibleQueueMusic.slice()");
@@ -1033,7 +1056,7 @@ test('finishing an earlier clip save does not close a newer editor or its draft'
 test('unrelated deletion keeps the replacement queue index rather than the still-playing old track index', async () => {
     const wait = deferred(), started = deferred(); let block = false;
     const a = app({ onInvoke: (cmd, args) => { if (block && cmd === 'file_exists' && args.path === '/music/2.mp3') { block = false; started.resolve(); return wait.promise; } } }); a.bind();
-    await a.run("(async()=>{visibleQueueMusic=await dbGetAll('music'); await playMusic('m1');})()"); block = true;
+    await a.run("(async()=>{visibleQueueMusic=(await requestLibraryPage({kind:'music'},'test')).items; await playMusic('m1');})()"); block = true;
     const replacing = a.run("playMusic('m2')"); await started.promise;
     await a.run("deleteLibraryEntries('music',['m3'])"); wait.resolve(true); await replacing;
     assert.equal(a.state.player.music.id, 'm2'); assert.equal(a.state.player.queue[a.state.player.index].id, 'm2');
@@ -1176,4 +1199,300 @@ test('audio metadata arriving after typing keeps the clip draft dirty and retain
     a.$('clipAudio').onloadedmetadata();
     assert.equal(a.state.clipStart, 20); assert.equal(a.state.clipEnd, 45); assert.equal(a.run('isClipEditorDirty()'), true);
     assert.equal(await a.run('closeClipEditor()'), false); assert.equal(a.$('clipName').value, 'Typed before audio loaded');
+});
+
+
+test('empty searches explain the filter and keep both recent mode controls', async () => {
+    const a = app({ realRender: true }); a.bind();
+    a.state.currentView = 'recent'; a.state.recentMode = 'used';
+    await a.run('render()');
+    assert.match(a.$('contentArea').innerHTML, /暂无播放记录/);
+    assert.match(a.$('contentArea').innerHTML, /data-recent-mode="added"/);
+    assert.match(a.$('contentArea').innerHTML, /data-recent-mode="used"/);
+    a.state.currentView = 'all'; a.state.search = 'no such track';
+    await a.run('render()');
+    assert.match(a.$('contentArea').innerHTML, /没有匹配结果/);
+    assert.match(a.$('contentArea').innerHTML, /data-clear-library-filters/);
+    assert.doesNotMatch(a.$('contentArea').innerHTML, /还没有音乐/);
+    assert(!a.calls.some(c => ['list_music','list_clips'].includes(c.command)));
+});
+
+test('library rendering consumes one SQL page and ignores an older view response', async () => {
+    const delayed = deferred(); let first = true;
+    const a = app({ realRender:true, onInvoke: (cmd,args) => {
+        if(cmd === 'query_library_page' && args.query.kind === 'music' && first) { first=false; return delayed.promise; }
+    }});
+    const old = a.run('render()'); await tick();
+    a.state.currentView = 'clips'; await a.run('render()');
+    const current = a.$('contentArea').innerHTML;
+    delayed.resolve({items:a.tracks,total:3,page:1,pageSize:50,totalPages:1}); await old;
+    assert.equal(a.$('contentArea').innerHTML,current);
+    assert.match(current,/clip-library-row/);
+});
+
+test('SQL page request coalesces overlapping identical reads without keeping full-library snapshots', async () => {
+    const wait=deferred(); let calls=0;
+    const a=app({onInvoke:cmd=>{if(cmd==='query_library_page'){calls++;return wait.promise;}}});
+    const first=a.run("requestLibraryPage({kind:'music'},'test')"),second=a.run("requestLibraryPage({kind:'music'},'test')");
+    wait.resolve({items:[],total:0,page:1,pageSize:50,totalPages:1});await Promise.all([first,second]);
+    assert.equal(calls,1);
+});
+
+test('cancelling while one import write commits retains that item and leaves the rest pending', async () => {
+    const started=deferred(),commit=deferred();
+    const a=app({onInvoke:(cmd,args)=>{if(cmd==='create_music' && args.music.name==='X'){started.resolve();return commit.promise;}}});
+    a.run("getAudioDuration=async()=>180; state.importFiles=['X','Y','Z'].map(name=>({name,path:'/'+name+'.mp3',album:'A'}))");
+    const importing=a.run('importSelectedFiles()');await started.promise;
+    a.run('cancelImportTask()');commit.resolve();await importing;
+    assert.deepEqual(Array.from(a.state.importFiles,m=>m.name),['Y','Z']);
+    assert.equal(a.calls.filter(c=>c.command==='create_music').length,1);
+    assert.match(a.$('importProgressText').textContent,/导入 1 \/ 3/);
+    assert.equal(a.$('selectedFiles').inert,false);
+    await a.run('importSelectedFiles()');
+    assert.equal(a.tracks.filter(m=>m.name==='X').length,1);
+    assert.equal(a.state.importFiles.length,0);
+});
+
+test('import metadata prefetch never exceeds three pending files and cancellation releases them', async () => {
+    const a=app();let active=0,peak=0;
+    a.context.measure=(_path,{signal})=>new Promise((resolve,reject)=>{
+        active++;peak=Math.max(peak,active);
+        signal.addEventListener('abort',()=>{active--;reject(Object.assign(new Error('cancel'),{name:'AbortError'}));},{once:true});
+    });
+    a.run("getAudioDuration=measure; state.importFiles=Array.from({length:10},(_,i)=>({name:String(i),path:'/'+i+'.mp3'}))");
+    const importing=a.run('importSelectedFiles()');await tick();
+    assert.equal(peak,3);a.run('cancelImportTask()');await importing;
+    assert.equal(active,0);assert.equal(a.state.importFiles.length,10);
+    assert.equal(a.calls.filter(c=>c.command==='create_music').length,0);
+});
+
+test('deleting the last clip on a later detail page clamps the SQL page and preserves metadata drafts', async () => {
+    const a=app();
+    for(let i=2;i<=31;i++) a.clips.push({id:`c${i}`,musicId:'m1',name:`Part ${i}`,start:i*10,end:i*10+5,tags:[],tagIds:[]});
+    a.state.pages['music-clips:m1']=2;
+    await a.run("openDetail('m1')");
+    const input=a.$('detailEditName');input.value='unsaved draft';
+    await a.run("deleteLibraryEntries('clips',['c31'])");
+    assert.equal(a.state.pages['music-clips:m1'],1);
+    assert.equal(a.$('detailClipList').querySelectorAll('.clip-item').length,30);
+    assert.equal(a.$('detailEditName'),input);assert.equal(input.value,'unsaved draft');
+});
+
+test('an early scan cancellation is resent after registration and releases its event listener', async () => {
+    const pending=deferred();let listener,unlistened=0;
+    const a=app({onInvoke:cmd=>cmd==='scan_import_sources'?pending.promise:undefined});
+    a.context.window.__TAURI__.event={listen:async(_name,fn)=>{listener=fn;return()=>unlistened++;}};
+    const scan=a.run("getNewImportItems(['/test/folder'])");await tick();
+    const request=a.calls.find(c=>c.command==='scan_import_sources').args.requestId;
+    a.run('cancelImportTask()');
+    listener({payload:{requestId:request,completed:0,total:0,started:true}});
+    pending.resolve({items:[],warnings:[],cancelled:true});
+    assert.equal((await scan).length,0);assert.equal(unlistened,1);
+    assert.equal(a.calls.filter(c=>c.command==='cancel_import_scan').length,2);
+    assert.match(a.$('importProgressText').textContent,/已停止扫描/);
+});
+
+test('mixed folder imports skip thousands of duplicates without a dialog and keep new files confirmable', async () => {
+    const duplicates = Array.from({ length: 2000 }, (_, i) => `/mock/existing/${i}.mp3`);
+    const fresh = ['/mock/new/A.mp3', '/mock/new/B.mp3', '/mock/new/C.mp3'];
+    const items = [...duplicates, ...fresh].map(path => ({ path, exists: true, name: path.split('/').pop(), duration: 180 }));
+    const a = app({ renderImports: true, onInvoke: cmd => cmd === 'scan_import_sources'
+        ? { items, warnings: [], cancelled: false }
+        : cmd === 'find_existing_music_paths' ? duplicates : undefined });
+    a.context.window.__TAURI__.dialog.open = async () => ['/mock/existing', '/mock/new'];
+    const dialogs = [];
+    a.context.window.__TAURI__.dialog.message = async text => dialogs.push(text);
+    await a.run('chooseFolders()'); await tick();
+    assert.equal(dialogs.length, 0, 'duplicate detection must not require dismissing a native alert');
+    assert.deepEqual(Array.from(a.state.importFiles, item => item.path), fresh);
+    assert.equal(a.$('confirmImportBtn').disabled, false);
+    assert.equal(a.$('confirmImportBtn').textContent, '确认导入 3 首');
+    assert.equal(a.$('importProgressText').textContent, '已跳过 2000 首重复音乐，新增 3 首待导入');
+    assert.equal(a.calls.filter(call => call.command === 'create_music').length, 0, 'selection still needs explicit import confirmation');
+    a.run('getAudioDuration = async () => 180');
+    await a.run('importSelectedFiles()');
+    assert.deepEqual(a.calls.filter(call => call.command === 'create_music').map(call => call.args.music.path), fresh);
+});
+
+test('an all-duplicate selection leaves existing import drafts intact and reports no new music', async () => {
+    const a = app({ renderImports: true, onInvoke: cmd => cmd === 'scan_import_sources'
+        ? { items: [{ path: '/music/1.mp3', exists: true, name: 'Existing' }], warnings: [], cancelled: false }
+        : cmd === 'find_existing_music_paths' ? ['/music/1.mp3'] : undefined });
+    a.context.window.__TAURI__.dialog.open = async () => ['/music'];
+    await a.run('chooseFolders()'); await tick();
+    assert.equal(a.messages.length, 0);
+    assert.equal(a.state.importFiles.length, 0);
+    assert.equal(a.$('confirmImportBtn').disabled, true);
+    assert.equal(a.$('importProgressText').textContent, '已跳过 1 首重复音乐，本次没有新增音乐');
+    a.run("state.importFiles = [{path:'/pending.mp3',name:'Pending',album:'Draft'}]");
+    await a.run('chooseFolders()'); await tick();
+    assert.equal(a.messages.length, 0);
+    assert.deepEqual(Array.from(a.state.importFiles, item => item.path), ['/pending.mp3']);
+    assert.equal(a.$('confirmImportBtn').textContent, '确认导入 1 首');
+    assert.equal(a.$('confirmImportBtn').disabled, false);
+});
+
+test('duplicate summaries count both saved and pending files while keeping pending edits', async () => {
+    const items = ['/music/1.mp3', '/pending.mp3', '/new.mp3'].map(path => ({ path, name: path, exists: true }));
+    const a = app({ renderImports: true, onInvoke: cmd => cmd === 'scan_import_sources'
+        ? { items, warnings: [], cancelled: false }
+        : cmd === 'find_existing_music_paths' ? ['/music/1.mp3'] : undefined });
+    a.context.window.__TAURI__.dialog.open = async () => ['/music'];
+    a.run("state.importFiles = [{path:'/pending.mp3',name:'Keep my draft',album:'My album'}]");
+    await a.run('chooseFolders()'); await tick();
+    assert.equal(a.messages.length, 0);
+    assert.equal(a.state.importFiles.length, 2);
+    assert.equal(a.state.importFiles[0].name, 'Keep my draft');
+    assert.equal(a.$('importProgressText').textContent, '已跳过 2 首重复音乐，新增 1 首待导入');
+    assert.equal(a.$('confirmImportBtn').textContent, '确认导入 2 首');
+});
+
+function assignedTagButton(kind, id, tagId, parent = null) {
+    const button = new Element(); button.tagName = 'BUTTON';
+    button.dataset.removeAssignedTag = String(tagId);
+    button.dataset.tagOwnerKind = kind; button.dataset.tagOwnerId = id;
+    button.parentElement = parent;
+    return button;
+}
+
+test('music tags expose a named inline removal control for the exact tag ID', () => {
+    const a = app();
+    const html = a.run("renderInlineMusicTags({id:'m1',tags:['Same','Same'],tagIds:[1,2]})");
+    assert.match(html, /data-remove-assigned-tag="1"/);
+    assert.match(html, /data-remove-assigned-tag="2"/);
+    assert.match(html, /aria-label="从音乐移除 Tag Same"/);
+});
+
+test('removing a music tag from its row preserves same-name tags and never starts playback', async () => {
+    const a = app(); a.bind();
+    a.tracks[0].tags = ['Same', 'Same']; a.tracks[0].tagIds = [1, 2];
+    const row = new Element(); row.dataset.musicId = 'm1';
+    await a.$('contentArea').fire('click', { target: assignedTagButton('music','m1',1,row) });
+    assert.deepEqual(a.tracks[0].tagIds, [2]);
+    assert.deepEqual(a.tracks[0].tags, ['Same']);
+    assert.equal(a.tags.length, 3, 'the shared tag library is retained');
+    assert.equal(a.state.player.music, null);
+    assert(!a.calls.some(c => c.command === 'delete_tag'));
+});
+
+for (const container of ['contentArea','musicClipsBody','detailContent','candidatePanelBody']) {
+    test(`clip tags can be removed in ${container} without changing parent tags or clip timing`, async () => {
+        const a = app(); a.bind();
+        a.clips[0].tags=['A','B']; a.clips[0].tagIds=[1,2];
+        a.tracks[0].tags=['A']; a.tracks[0].tagIds=[1];
+        const row=new Element(); row.classList.add('clip-item'); row.dataset.clipId='c1'; row.dataset.panelClipId='c1';
+        await a.$(container).fire('click',{target:assignedTagButton('clip','c1',1,row)});
+        assert.deepEqual(a.clips[0].tagIds,[2]);
+        assert.equal(a.clips[0].start,10);assert.equal(a.clips[0].end,20);
+        assert.deepEqual(a.tracks[0].tagIds,[1]);
+        assert.equal(a.state.player.music,null);
+        assert.equal(a.tags.length,3);
+    });
+}
+
+test('failed inline tag removal preserves the tag and allows a later retry', async () => {
+    let fail=true;
+    const a=app({onInvoke:cmd=>{if(cmd==='update_music' && fail)throw new Error('disk offline');}});a.bind();
+    a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];
+    const button=assignedTagButton('music','m1',1);
+    await a.$('contentArea').fire('click',{target:button});
+    assert.deepEqual(a.tracks[0].tagIds,[1]);assert(a.messages.some(m=>m.includes('移除 Tag 失败')));
+    fail=false;
+    await a.$('contentArea').fire('click',{target:button});
+    assert.deepEqual(a.tracks[0].tagIds,[]);
+});
+
+test('rapid removals of two clip tags merge instead of restoring the first tag', async () => {
+    const a=app();a.bind();a.clips[0].tags=['A','B','C'];a.clips[0].tagIds=[1,2,3];
+    await Promise.all([1,2].map(id=>a.$('contentArea').fire('click',{target:assignedTagButton('clip','c1',id)})));
+    assert.deepEqual(a.clips[0].tagIds,[3]);
+});
+
+test('saving an already-open clip editor preserves an inline removal and its own draft', async () => {
+    const a=app();a.clips[0].tags=['A','B'];a.clips[0].tagIds=[1,2];
+    await a.run("openClipEditorForClip('c1')");
+    a.$('clipName').value='Edited name';
+    await a.run("removeAssignedTag('clip','c1',1)");
+    await a.run('saveClip()');
+    assert.equal(a.clips[0].name,'Edited name');
+    assert.deepEqual(a.clips[0].tagIds,[2]);
+});
+
+test('inline tag removal preserves concurrent music edits and live detail input', async () => {
+    const gate=deferred(),started=deferred();let block=true;
+    const a=app({onInvoke:cmd=>{if(cmd==='update_music' && block){block=false;started.resolve();return gate.promise;}}});
+    a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];
+    await a.run("openDetail('m1')");a.$('detailEditName').value='Uncommitted name';
+    const removal=a.run("removeAssignedTag('music','m1',1)");await started.promise;
+    const edit=a.run("mutateMusic('m1',()=>({artist:'New artist'}))");
+    gate.resolve();await Promise.all([removal,edit]);
+    assert.equal(a.tracks[0].artist,'New artist');assert.deepEqual(a.tracks[0].tagIds,[]);
+    assert.equal(a.$('detailEditName').value,'Uncommitted name');
+});
+
+test('removing the filter tag updates the SQL result without removing the shared tag', async () => {
+    const a=app({realRender:true});a.bind();
+    a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];a.state.activeTagIds=[1];
+    await a.run('render()');
+    assert.match(a.$('contentArea').innerHTML,/data-remove-assigned-tag="1"/);
+    await a.$('contentArea').fire('click',{target:assignedTagButton('music','m1',1)});
+    assert.match(a.$('contentArea').innerHTML,/没有匹配结果/);
+    assert(a.tags.some(tag=>tag.id===1));
+});
+
+test('inline removal leaves an already playing track and its position uninterrupted', async () => {
+    const a=app();a.bind();a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];
+    await a.run("playMusic('m1')");a.$('barAudio').currentTime=42;
+    const plays=a.$('barAudio').plays.length;
+    const row=new Element();row.dataset.musicId='m1';
+    await a.$('contentArea').fire('click',{target:assignedTagButton('music','m1',1,row)});
+    assert.equal(a.state.player.music.id,'m1');assert.equal(a.$('barAudio').currentTime,42);
+    assert.equal(a.$('barAudio').paused,false);assert.equal(a.$('barAudio').plays.length,plays);
+    assert.deepEqual(a.tracks[0].tagIds,[]);
+});
+
+for (const kind of ['music','clip']) {
+    test(`cancelling ${kind} tag confirmation preserves the association without writing`, async () => {
+        const a=app({confirmed:false});a.bind();
+        const record=kind==='music'?a.tracks[0]:a.clips[0];record.tags=['A'];record.tagIds=[1];
+        const button=assignedTagButton(kind,record.id,1);
+        await a.$('contentArea').fire('click',{target:button});
+        assert.deepEqual(record.tagIds,[1]);
+        assert(!a.calls.some(c=>['update_music','update_clip','delete_tag'].includes(c.command)));
+        assert.equal(button.disabled,false);
+    });
+}
+
+test('tag removal waits for explicit confirmation and rapid repeated clicks show one prompt', async () => {
+    const a=app();a.bind();a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];
+    const answer=deferred(),prompts=[];
+    a.context.window.__TAURI__.dialog.ask=async(message,options)=>{prompts.push({message,options});return answer.promise;};
+    const button=assignedTagButton('music','m1',1);
+    const removing=a.$('contentArea').fire('click',{target:button});await tick();
+    await a.$('contentArea').fire('click',{target:button});
+    assert.equal(prompts.length,1);assert.equal(button.disabled,true);
+    assert(!a.calls.some(c=>c.command==='update_music'));
+    assert.match(prompts[0].message,/Track 1/);assert.match(prompts[0].message,/A/);
+    assert.equal(prompts[0].options.okLabel,'移除');assert.equal(prompts[0].options.cancelLabel,'取消');
+    answer.resolve(true);await removing;
+    assert.deepEqual(a.tracks[0].tagIds,[]);
+    assert.equal(a.calls.filter(c=>c.command==='update_music').length,1);
+});
+
+test('cancelling an album tag confirmation preserves its cached and persisted associations', async () => {
+    const a=app({confirmed:false});await a.run('loadAlbumTags()');
+    await a.run("removeAlbumTag('A',1)");
+    assert.deepEqual(a.albumTags.get('A'),[1,2,3]);
+    assert.deepEqual(Array.from(a.run("albumTagsCache.get('A')")),[1,2,3]);
+    assert(!a.calls.some(c=>c.command==='set_album_tags'));
+});
+
+test('cancelling a detail tag confirmation keeps its tag and live input draft', async () => {
+    const a=app({confirmed:false});a.tracks[0].tags=['A'];a.tracks[0].tagIds=[1];
+    await a.run("openDetail('m1')");a.$('detailEditName').value='Unsaved name';
+    const button=new Element();button.dataset.removeDetailTag='0';
+    await a.$('detailEditTags').fire('click',{target:button});
+    assert.deepEqual(a.tracks[0].tagIds,[1]);assert.deepEqual(Array.from(a.state.editTagIds),[1]);
+    assert.equal(a.$('detailEditName').value,'Unsaved name');
+    assert(!a.calls.some(c=>c.command==='update_music'));
 });

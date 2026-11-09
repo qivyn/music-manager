@@ -8097,3 +8097,22 @@ body.view-home .top-nav .nav-count { border: 0; background: none; color: var(--h
 }
 .settings-action .update-menu-badge { color: var(--primary-strong); font-size: 11px; font-weight: 600; }
 .settings-action .update-menu-badge[hidden] { display: none; }
+
+/* Import status remains visible when a partial batch needs attention. */
+.import-progress { display: flex; align-items: center; gap: 12px; padding: 12px 24px; font-size: 13px; }
+.import-progress progress { width: 120px; flex-shrink: 0; accent-color: var(--accent); }
+.import-progress span { overflow-wrap: anywhere; }
+
+/* Assigned tags are direct removal buttons in lists, cards and candidate rows. */
+.tag.removable-tag {
+    border: 0;
+    gap: 4px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.removable-tag .tag-remove-mark { opacity: .65; font-size: 13px; }
+.removable-tag:hover .tag-remove-mark,
+.removable-tag:focus-visible .tag-remove-mark { opacity: 1; }
+.tag.removable-tag:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tag.removable-tag:disabled { opacity: .5; cursor: wait; }

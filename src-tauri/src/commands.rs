@@ -65,6 +65,11 @@ macro_rules! lock_db {
     };
 }
 
+#[path = "library_query.rs"]
+pub mod library_query;
+#[path = "library_import.rs"]
+pub mod library_import;
+
 fn mime_from_ext(path: &str) -> String {
     let ext = Path::new(path)
         .extension()
@@ -557,28 +562,6 @@ pub fn export_clip_wav(source_path: String, start: f64, end: f64, dest_path: Str
     }
     output.persist(destination).map_err(|e| format!("保存 WAV 失败: {e}"))?;
     Ok(dest_path)
-}
-
-fn collect_audio_files(folder: &Path, files: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(folder) { Ok(entries) => entries, Err(_) => return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() { collect_audio_files(&path, files); }
-        else if path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp3")) { files.push(path); }
-    }
-}
-
-#[tauri::command]
-pub fn scan_import_sources(paths: Vec<String>) -> Vec<ProbeResult> {
-    let mut files = Vec::new();
-    for raw_path in paths {
-        let path = PathBuf::from(raw_path);
-        if path.is_dir() { collect_audio_files(&path, &mut files); }
-        else if path.is_file() && path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp3")) { files.push(path); }
-    }
-    files.sort();
-    files.dedup();
-    files.into_iter().map(|path| probe_path(path.to_string_lossy().into_owned())).filter(|item| item.exists).collect()
 }
 
 #[derive(Serialize)]
@@ -1482,7 +1465,7 @@ fn apply_album_renames(conn: &rusqlite::Connection, renames: &HashMap<String, Ha
 #[tauri::command]
 pub fn list_candidates(state: tauri::State<'_, AppState>) -> Result<Vec<CandidateEntry>, String> {
     let conn = lock_db!(state);
-    let mut stmt = conn.prepare("SELECT target_id, kind FROM candidate_entries ORDER BY created_at ASC")
+    let mut stmt = conn.prepare("SELECT target_id, kind FROM candidate_entries ORDER BY created_at ASC, target_id ASC")
         .map_err(|e| format!("准备候选查询失败: {e}"))?;
     let entries = stmt.query_map([], |row| Ok(CandidateEntry { target_id: row.get(0)?, kind: row.get(1)? }))
         .map_err(|e| format!("查询候选失败: {e}"))?

@@ -487,11 +487,17 @@
 
         </div>
 
+        <div id="importProgress" class="import-progress hidden" role="status" aria-live="polite">
+            <progress id="importProgressMeter" max="1"></progress>
+            <span id="importProgressText"></span>
+        </div>
+
         <div class="modal-footer">
             <button class="secondary-btn" data-close-modal>
                 取消
             </button>
 
+            <button id="cancelImportTaskBtn" class="secondary-btn hidden" type="button">停止导入</button>
             <button
                 id="confirmImportBtn"
                 class="primary-btn"
@@ -697,7 +703,17 @@
 <script src="home-scene-motion.js"></script>
 <script src="home-scene.js"></script>
 <script src="theme-transition.js"></script>
+<script src=".preview/library-query.js"></script>
 <script src=".preview/mock-tauri.js"></script>
+<script src="library-data.js"></script>
+<script src="assigned-tags.js"></script>
+<script src="home-player.js"></script>
+<script src="library-browser.js"></script>
+<script src="music-detail.js"></script>
+<script src="player.js"></script>
+<script src="candidates.js"></script>
+<script src="library-import.js"></script>
+<script src="clip-editor.js"></script>
 <script src="app.js"></script>
 <script src="updater.js"></script>
 

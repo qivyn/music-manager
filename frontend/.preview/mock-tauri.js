@@ -34,14 +34,17 @@
         { id: 4, name: "治愈", categoryId: 1, category: "情绪", parentId: null, path: "治愈", musicCount: 3 },
         { id: 5, name: "剧情", categoryId: 2, category: "用途", parentId: null, path: "剧情", musicCount: 2 },
         { id: 6, name: "片头", categoryId: 2, category: "用途", parentId: null, path: "片头", musicCount: 1 },
+        { id: 7, name: "慢节奏", categoryId: 3, category: "节奏", parentId: null, path: "慢节奏", musicCount: 1 },
         { id: 8, name: "快节奏", categoryId: 3, category: "节奏", parentId: null, path: "快节奏", musicCount: 1 }
     ];
+    for (const item of [...music, ...clips]) item.tags = item.tagIds.map(id => tags.find(tag => tag.id === id)?.name || "");
     const candidates = [{ targetId: "m03", kind: "music" }];
     const albumTags = new Map([["城市速写", [4, 5]], ["Midnight Tapes", [2]]]);
 
     const svgCover = (seed, ch) => "data:image/svg+xml;utf8," + encodeURIComponent(
         `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${seed},52%,70%)"/><stop offset="1" stop-color="hsl(${(seed + 45) % 360},48%,40%)"/></linearGradient></defs><rect width="256" height="256" fill="url(#g)"/><text x="128" y="152" font-size="96" text-anchor="middle" fill="rgba(255,255,255,.88)" font-family="serif">${ch}</text></svg>`);
 
+    const queries = createPreviewLibraryQuery({ music, clips, tags, candidates });
     async function invoke(cmd, args = {}) {
         switch (cmd) {
             case "init_db": return true;
@@ -53,11 +56,23 @@
             case "get_update_welcome": return { version: "0.0.0", notes: "", launchedByInstaller: false };
             case "get_database_path": return "/Users/qi/Library/Application Support/com.musicmanager.app/library.db";
             case "sync_library_locations": return { updatedPaths: 0, updatedAlbums: 0 };
+            case "query_library_page": return queries.page(args.query);
+            case "query_music_neighbor": return queries.neighbor(args.query, args.id, args.direction);
+            case "library_related_ids": return queries.related(args.musicIds, args.album);
+            case "cancel_import_scan": return null;
             case "list_music": return music;
             case "list_clips": return clips;
             case "list_clips_for_music": return clips.filter(c => c.musicId === args.musicId);
-            case "get_music": return music.find(m => m.id === args.id) || null;
-            case "get_clip": return clips.find(c => c.id === args.id) || null;
+            case "get_music": return structuredClone(music.find(m => m.id === args.id) || null);
+            case "get_clip": return structuredClone(clips.find(c => c.id === args.id) || null);
+            case "update_music": case "update_clip": {
+                const value = cmd === "update_music" ? args.music : args.clip;
+                const record = (cmd === "update_music" ? music : clips).find(item => item.id === value.id);
+                if (!record) throw new Error("记录不存在");
+                Object.assign(record, value);
+                record.tags = record.tagIds.map(id => tags.find(tag => tag.id === id)?.name || "");
+                return null;
+            }
             case "get_library_counts": return { music: music.length, clips: clips.length };
             case "mark_music_played": return null;
             case "export_clip_wav": return args.destPath;
@@ -66,7 +81,10 @@
                 return (args.ids || [])
                     .filter(id => ["m01", "m03", "m04", "m07"].includes(id))
                     .map(id => ({ id, coverArt: svgCover((parseInt(id.slice(1), 10) * 47) % 360, music.find(m => m.id === id)?.name?.slice(0, 1) || "♪") }));
-            case "list_tags": return tags;
+            case "list_tags": return tags.map(tag => ({ ...tag, musicCount:
+                music.filter(item => item.tagIds.includes(tag.id)).length
+                + clips.filter(item => item.tagIds.includes(tag.id)).length
+                + [...albumTags.values()].filter(ids => ids.includes(tag.id)).length }));
             case "list_tag_category_records": return categories;
             case "list_tag_categories": return categories.map(c => c.name);
             case "list_candidates": return candidates;
@@ -88,7 +106,7 @@
             case "file_exists": return true;
             case "find_existing_music_paths": return [];
             case "probe_file": return { exists: false };
-            case "scan_import_sources": return [];
+            case "scan_import_sources": return { items: [], warnings: [], cancelled: false };
             case "get_audio_base_url": return null;
             default: return null;
         }

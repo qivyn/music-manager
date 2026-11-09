@@ -227,3 +227,79 @@ fn offline_metadata_edits_preserve_bookmark_and_rebinding_still_validates_files(
     assert_eq!(conn.query_row("SELECT path FROM music WHERE id='offline'", [], |r| r.get::<_, String>(0)).unwrap(), input.path);
     assert_ne!(conn.query_row("SELECT file_bookmark FROM music WHERE id='offline'", [], |r| r.get::<_, Vec<u8>>(0)).unwrap(), vec![1,2,3]);
 }
+
+
+#[test]
+fn sql_pages_filter_before_limiting_and_clamp_after_deletion() {
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir,conn)=library();
+    for i in 0..127 {seed_music(&conn,&format!("m{i:03}"),if i%2==0 {"Ａ 专辑"} else {"Other"});}
+    conn.execute("UPDATE music SET name='ÉTÉ 100%_曲' WHERE id='m126'",[]).unwrap();
+    let mut q=LibraryQuery {kind:"music".into(),page:2,page_size:10,album:Some("Other".into()),..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!((page.total,page.items.len(),page.page),(63,10,2));
+    assert_eq!(page.items[0]["id"],"m021");
+    assert!(page.items.iter().all(|m|m["coverArt"]==""));
+    q.album=None; q.search="été 100%_".into();
+    let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!((page.total,page.page,page.items.len()),(1,1,1));
+    assert_eq!(page.items[0]["id"],"m126");
+    q.search="missing".into();
+    let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!((page.total,page.page,page.total_pages,page.items.len()),(0,1,1,0));
+    q.kind="albums".into();q.search.clear();q.album_search="a专辑".into();q.page_size=1;
+    let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!(page.total,1); assert_eq!(page.items[0]["count"],64);
+}
+
+#[test]
+fn sql_pages_preserve_tag_dimensions_descendants_and_clip_search() {
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir,conn)=library();
+    seed_music(&conn,"a","Album");seed_music(&conn,"b","Album");
+    let root=tag(&conn,"Parent");let child=tag(&conn,"Child");
+    conn.execute("UPDATE tags SET parent_id=?1 WHERE id=?2",params![root,child]).unwrap();
+    conn.execute("INSERT INTO tag_categories(name,created_at) VALUES('Purpose',1)",[]).unwrap();
+    let cat=conn.last_insert_rowid();let other=tag(&conn,"Use");
+    conn.execute("UPDATE tags SET category_id=?1 WHERE id=?2",params![cat,other]).unwrap();
+    conn.execute("INSERT INTO music_tags VALUES('a',?1)",[child]).unwrap();
+    conn.execute("INSERT INTO music_tags VALUES('b',?1)",[child]).unwrap();
+    conn.execute("INSERT INTO clips VALUES('clip','a','special phrase',0,2,1,1)",[]).unwrap();
+    conn.execute("INSERT INTO clip_tags VALUES('clip',?1)",[other]).unwrap();
+    let mut q=LibraryQuery {kind:"music".into(),active_tag_ids:vec![root,other],page_size:1,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.total,1);assert_eq!(page.items[0]["id"],"a");
+    q.active_tag_ids.clear();q.search="special phrase".into();
+    assert_eq!(query_page_in(&conn,&q).unwrap().total,1);
+    q.kind="clips".into();let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!(page.items[0]["music"]["id"],"a");assert_eq!(page.items[0]["clip"]["tagIds"],serde_json::json!([other]));
+    q.kind="tags".into();q.search.clear();q.page_size=1;
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.total,2);
+    assert_eq!(page.items[0]["label"],"Parent / Child");assert_eq!(page.items[0]["count"],2);
+}
+
+#[test]
+fn sql_recent_and_candidates_have_stable_page_order_and_bounded_payloads() {
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir,conn)=library();
+    for i in 0..105 {let id=format!("m{i:03}");seed_music(&conn,&id,"A");conn.execute("UPDATE music SET created_at=?1,last_played_at=?1 WHERE id=?2",params![i,id]).unwrap();}
+    let q=LibraryQuery{kind:"music".into(),recent:Some("used".into()),page:2,page_size:10,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.total,100);assert_eq!(page.items[0]["id"],"m094");
+    conn.execute("INSERT INTO candidate_entries VALUES('m104','music',1)",[]).unwrap();
+    conn.execute("INSERT INTO clips VALUES('clip','m104','part',2,5,1,1)",[]).unwrap();
+    conn.execute("INSERT INTO candidate_entries VALUES('clip','clip',2)",[]).unwrap();
+    let q=LibraryQuery{kind:"candidates".into(),page:2,page_size:1,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.total,2);assert_eq!(page.items[0]["kind"],"clip");assert_eq!(page.items[0]["duration"],3.0);
+}
+
+#[test]
+fn sql_search_preserves_alphabetical_tag_phrases() {
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir, conn) = library();
+    seed_music(&conn, "track", "Album");
+    let z = tag(&conn, "Zulu");
+    let a = tag(&conn, "Alpha");
+    conn.execute("INSERT INTO music_tags VALUES('track',?1)", [z]).unwrap();
+    conn.execute("INSERT INTO music_tags VALUES('track',?1)", [a]).unwrap();
+    let q = LibraryQuery { kind: "music".into(), search: "Alpha Zulu".into(), ..Default::default() };
+    assert_eq!(query_page_in(&conn, &q).unwrap().total, 1);
+}
