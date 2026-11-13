@@ -10,7 +10,7 @@ const section = (start, end) => source.slice(source.indexOf(start), source.index
 function navigation() {
     let active = null;
     const renders = [];
-    const elements = Object.fromEntries(["searchInput", "pageTitle", "homeTrackTitle", "updateModal"].map(id => [id, {
+    const elements = Object.fromEntries(["searchInput", "pageTitle", "homeTrackTitle", "updateModal", "movieUsageModal"].map(id => [id, {
         id, tagName: id === "searchInput" ? "INPUT" : "DIV", value: "",
         classList: { contains: () => true }, setAttribute() {}, focus() { active = this; }
     }]));
@@ -21,7 +21,7 @@ function navigation() {
     const context = {
         console, state: { currentView: "home" }, $: id => elements[id],
         render: () => new Promise(resolve => renders.push(resolve)),
-        renderFilterPanel() {}, renderSidebarTags() {}, resetPagination() {}, closeMusicContextPanels() {},
+        renderSidebarTags() {}, closeMovieUsageFilter() {}, resetPagination() {}, closeMusicContextPanels() {},
         clipEditorPanel: { classList: { contains: () => true } },
         document: {
             querySelectorAll: () => buttons,
@@ -59,6 +59,13 @@ test("ordinary navigation still focuses the destination heading", async () => {
     app.renders[0]();
     await done;
     assert.equal(app.focused(), "pageTitle");
+});
+
+test("the hidden Recent route opens the library", async () => {
+    const app = navigation();
+    const done = app.context.navigateToView('recent');
+    app.renders[0](); await done;
+    assert.equal(app.context.state.currentView, 'all');
 });
 
 test("a slow navigation does not steal focus the user moved to search", async () => {

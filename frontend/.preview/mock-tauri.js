@@ -44,8 +44,13 @@
     const svgCover = (seed, ch) => "data:image/svg+xml;utf8," + encodeURIComponent(
         `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${seed},52%,70%)"/><stop offset="1" stop-color="hsl(${(seed + 45) % 360},48%,40%)"/></linearGradient></defs><rect width="256" height="256" fill="url(#g)"/><text x="128" y="152" font-size="96" text-anchor="middle" fill="rgba(255,255,255,.88)" font-family="serif">${ch}</text></svg>`);
 
-    const queries = createPreviewLibraryQuery({ music, clips, tags, candidates });
+    const movies = [{id:1,name:"远山",createdAt:1,updatedAt:1},{id:2,name:"归途",createdAt:2,updatedAt:2},{id:3,name:"夏日来信",createdAt:3,updatedAt:3}];
+    const usages = [{id:1,musicId:"m01",movieId:1,note:"片尾",createdAt:1,updatedAt:1},{id:2,musicId:"m01",movieId:2,note:"回忆段落",createdAt:2,updatedAt:2},{id:3,musicId:"m03",movieId:2,note:"开场",createdAt:3,updatedAt:3}];
+    const movieStore = createPreviewMovieStore({music,movies,usages});
+    const queries = createPreviewLibraryQuery({ music, clips, tags, candidates, movies, usages });
     async function invoke(cmd, args = {}) {
+        const movieResult = movieStore(cmd,args);
+        if(movieResult !== undefined) return structuredClone(movieResult);
         switch (cmd) {
             case "init_db": return true;
             case "get_installation_status": return {installationPath:"/Applications/声场档案.app",currentVersion:"本地预览",arch:"aarch64",canUpdate:true,otherInstallations:[]};

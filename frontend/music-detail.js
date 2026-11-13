@@ -56,7 +56,7 @@ function captureDetailDrafts(id) {
     }
     values.detailEditTagInput = $("detailEditTagInput").value;
     const active = document.activeElement;
-    return { values, clipsTab: $("detailClipsTab").classList.contains("active"),
+    return { values, moviesTab: $("detailMoviesTab")?.classList.contains("active"), clipsTab: $("detailClipsTab").classList.contains("active"),
         focus: active && [...Object.values(DETAIL_CONTROLS), "detailEditTagInput"].includes(active.id)
             ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null };
 }
@@ -64,12 +64,7 @@ function captureDetailDrafts(id) {
 function restoreDetailDrafts(drafts) {
     if (!drafts) return;
     for (const [id, value] of Object.entries(drafts.values)) $(id).value = value;
-    if (drafts.clipsTab) {
-        document.querySelectorAll("[data-detail-tab]").forEach(button => button.classList.toggle("active", button.dataset.detailTab === "clips"));
-        $("detailClipsTab").classList.add("active");
-        $("detailTabInfo").classList.add("hidden");
-        $("detailTabClips").classList.remove("hidden");
-    }
+    if (drafts.moviesTab || drafts.clipsTab) selectDetailTab(drafts.moviesTab ? "movies" : "clips");
     if (drafts.focus) {
         const control = $(drafts.focus.id);
         control.focus();
@@ -92,9 +87,22 @@ function syncDetailMusic(saved, shouldSync) {
     Object.assign(state.selectedMusic, saved);
 }
 
-async function openDetail(id) {
+async function openDetail(id, { tab = null } = {}) {
     const version = beginMusicContextRequest(id, "detail");
-    return readMusicContext(id, version, context => renderDetailContext(context, version));
+    return readMusicContext(id, version, context => {
+        renderDetailContext(context, version);
+        if (tab) selectDetailTab(tab);
+    });
+}
+
+function selectDetailTab(tab) {
+    document.querySelectorAll("[data-detail-tab]").forEach(button => button.classList.toggle("active", button.dataset.detailTab === tab));
+    $("detailClipsTab").classList.toggle("active", tab === "clips");
+    $("detailMoviesTab").classList.toggle("active", tab === "movies");
+    $("detailTabInfo").classList.toggle("hidden", tab !== "info");
+    $("detailTabClips").classList.toggle("hidden", tab !== "clips");
+    $("detailTabMovies").classList.toggle("hidden", tab !== "movies");
+    if (tab === "movies") void renderMusicMovieUsages();
 }
 
 function renderDetailClipRows(clips) {
@@ -267,6 +275,7 @@ function renderDetailContext({ music, clips }, version) {
                 }
             </button>
 
+            <button type="button" class="detail-tab" id="detailMoviesTab" data-detail-tab="movies">使用记录</button>
         </div>
 
 
@@ -489,51 +498,14 @@ function renderDetailContext({ music, clips }, version) {
 
         </div>
 
+        <div id="detailTabMovies" class="detail-tab-panel hidden"><div id="detailMovieUsages" class="detail-section"><div class="detail-value">正在读取使用记录…</div></div></div>
     `;
 
 
     /* Tab 切换 */
-
-    document
-        .querySelectorAll(
-            "[data-detail-tab]"
-        )
-        .forEach(btn => {
-
-            btn.addEventListener(
-                "click",
-                () => {
-
-                    document
-                        .querySelectorAll(
-                            "[data-detail-tab]"
-                        )
-                        .forEach(
-                            b =>
-                                b.classList
-                                    .remove("active")
-                        );
-
-                    btn.classList.add("active");
-
-                    const tab =
-                        btn.dataset.detailTab;
-
-                    $("detailTabInfo")
-                        .classList.toggle(
-                            "hidden",
-                            tab !== "info"
-                        );
-
-                    $("detailTabClips")
-                        .classList.toggle(
-                            "hidden",
-                            tab !== "clips"
-                        );
-                }
-            );
-        });
-
+    document.querySelectorAll("[data-detail-tab]").forEach(button => {
+        button.addEventListener("click", () => selectDetailTab(button.dataset.detailTab));
+    });
 
     $("detailPlayBtn")
         .onclick = () => {

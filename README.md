@@ -9,7 +9,8 @@
 ## 功能
 
 - **导入音乐**:选择或拖入 MP3 文件、文件夹，显示扫描和导入进度；可停止任务，保留已导入曲目及未完成的待导入文件。单文件时长读取超过 15 秒会报错并释放资源，检查文件或硬盘后可继续导入。只记录元数据与路径，不复制音频。
-- **多视图检索**:全部音乐 / 音乐片段 / 最近添加 / 专辑 / Tag
+- **多视图检索**:全部音乐 / 音乐片段 / 专辑 / Tag / 电影（暂时隐藏“最近”页面入口，保留播放历史）
+- **电影使用记录**：手动记录音乐用于哪些电影，电影与音乐按 ID 多对多关联，每对只记录一次，备注属于使用记录。音乐侧使用可搜索、可新建的电影多选列表弹窗；电影侧用独立的分页列表批量选择已有音乐，两侧都保留跨页选择并排除当前对象已有关联。
 - **搜索**:按名称、专辑、Tag 全局搜索
 - **标签系统**:给音乐和片段打 Tag，侧边栏常用 Tag 快速筛选；音乐列表/卡片、Tag 结果、片段列表、详情中的片段和候选清单上的标签带「×」，点击后弹出“移除 Tag”确认框，显示当前音乐/片段及标签名称。音乐详情和专辑上的即时移除也需确认；点击“移除”才保存，点击“取消”保留标签。标签库和其他条目的同一 Tag 保留，操作不会触发行试听。
 - **片段标记**:在时间轴上拖动起止点,给音乐某一段做标记、命名、打 Tag
@@ -19,9 +20,21 @@
 
 选择文件或文件夹后，重复路径会自动跳过，包括已入库和已在待导入列表中的文件。页面只汇总“已跳过 X 首重复音乐，新增 Y 首待导入”，不弹出重复提示或展示重复明细；全部重复时提示“本次没有新增音乐”，保留原有待导入草稿。未重复文件直接显示在待导入列表，检查资料后点击“确认导入”写入音乐库。
 
-音乐、片段、专辑、Tag、候选及详情片段列表由 SQLite 执行筛选、排序、计数和分页，只向界面返回当前页。专辑与 Tag 先分组统计再分页，搜索保留音乐与片段资料、标签匹配，以及同维度 OR、跨维度 AND 和子标签筛选。名称排序采用 SQLite `NOCASE` 并用 ID 固定同名记录的顺序；专辑名筛选保留全半角和空白归一化。首页按需读取音乐，跨页切歌通过 SQL 定位相邻歌曲。搜索无结果、空音乐库和暂无播放记录分别提示，最近列表在空状态下也能切换模式。
+音乐、片段、专辑、Tag、候选及详情片段列表由 SQLite 执行筛选、排序、计数和分页，只向界面返回当前页。专辑与 Tag 先分组统计再分页，搜索保留音乐与片段资料、标签匹配，以及同维度 OR、跨维度 AND 和子标签筛选。名称排序采用 SQLite `NOCASE` 并用 ID 固定同名记录的顺序；专辑名筛选保留全半角和空白归一化。首页按需读取音乐，跨页切歌通过 SQL 定位相邻歌曲。搜索无结果与空音乐库分别提示。专辑默认显示紧凑目录，每页 30 项；选择专辑后进入独立的音乐详情页，通过路径栏中的“‹ 专辑”返回，保留目录搜索、页码与试听状态。目录和音乐详情分别由 SQL 分页，不再默认展开左右分栏，也不再提供目录折叠按钮。Tag 筛选统一在左侧操作，移除工具栏的重复筛选面板；侧栏收起时仍提示已选 Tag 数量。
+
+专辑和电影目录不再显示内部大标题，采用约 52px 行高、名称与数量对齐的细分隔线列表。长名称省略显示，可通过悬停查看完整名称；总数和分页统一在底部，翻页或修改每页数量后回到列表顶部。管理操作收进每行“⋯”菜单，悬停、键盘聚焦或触屏时可访问，支持方向键、Escape、点击外部和滚动关闭，靠近底部时向上展开。电影改名/删除及专辑删除沿用原确认与保存行为；目录中的菜单不会触发详情跳转。详情使用“返回目录 / 当前名称”路径栏。
 
 列表与播放器复用同一份音频波形峰值；行内波形进入可视区域附近才加载，离开页面的任务会取消，当前播放任务优先。峰值缓存最多保留 128 首，不保存完整解码音频。导入前尚未入库的编辑草稿保留在内存中，关闭并重新打开导入窗口可继续处理；退出应用后这些草稿不会保存。
+
+### 记录电影使用
+
+音乐行和卡片展示使用数量及最多两部电影，影片标签采用白底、浅灰细边框及“🎬 片名”，使用常规字体，不加书名号，与普通紫色 #Tag 区分；深浅主题均保留白底，长片名最多占 150px，删除标记在悬停或键盘聚焦时显示（触屏保持可见）；可原地点击移除，需二次确认；只解除当前音乐的关联，不跳转电影页。点击使用数量打开音乐详情的“使用记录”。从音乐行“＋影片”或详情“＋记录使用”打开弹窗，直接显示电影勾选列表，每页 10 项；可搜索已有电影或把新片名加入“待新建”选项。创建电影和写入关联都在最终保存时一起提交，取消窗口不会创建电影或关联。同名查重查询整个电影表，覆盖已关联、被候选过滤和不在当前页中的电影；片名去除首尾空格、统一全半角和大小写后相同即复用同一个 ID。
+
+电影页默认显示紧凑目录，每页 30 部，支持搜索、新建、改名和删除。选中电影后进入独立详情，关联音乐默认每页 50 首；顶部搜索切换为本片音乐搜索，也支持现有 Tag 筛选。顶部“新建电影”在详情中切换为“添加音乐”。路径栏中的“‹ 电影”返回原目录，保留搜索和页码。新建电影可暂不关联音乐，同名电影复用已有 ID；取消新建不写数据库。点击“添加音乐”打开分页勾选列表，不提供新建音乐；“全选当前页”只选当前页，“清空已选”清除跨页选择。两种批量操作均可填写统一备注，只写入新增关联，已有记录的备注不覆盖。保存时遇到已经关联或已被移除的音乐，会跳过并汇总数量；数据库错误整体回滚，选择及备注保留供重试。
+
+使用记录可单独编辑备注或经二次确认后移除；电影改名同步所有引用，重名时拒绝改名，不自动合并。移除使用记录保留电影和音乐。删除音乐会同时清理它的电影使用记录，保留电影及原始音频。没有记录时不显示占位文字或空的电影行。“＋Tag”和“＋影片”并排显示在音乐标签区，仅在鼠标悬停或键盘聚焦时显示；触屏保留可见入口。电影使用状态使用与“设置”一致的自绘下拉菜单，支持选中标记、方向键、Escape 和点击外部关闭。试听和播放历史不会自动生成电影记录。删除电影需二次确认，在同一事务中删除电影及全部使用记录；失败整体回滚，音乐、片段和音频文件保留。本期不提供片段级独立使用记录。
+
+所有电影目录、使用记录、两侧候选和关联音乐列表都在 SQLite 中使用参数化 `WHERE / ORDER BY / COUNT / LIMIT / OFFSET`；前端只显示当前页。音乐列表的两部电影预览也通过 SQL 按当前页音乐分组限定，不取回全部关联后再截断。
 
 ## 界面预览
 
@@ -108,6 +121,8 @@ music-manager/
 │   ├── app.js               # 共享状态、启动、导航及事件协调
 │   ├── library-data.js      # IPC、分页请求及音乐/片段写入队列
 │   ├── assigned-tags.js     # 已关联 Tag 的就地移除与界面同步
+│   ├── catalog-controls.js # 紧凑目录操作菜单与分页
+│   ├── movie-usage.js、movie-usage.css # 电影页面、使用记录与双向选择器
 │   ├── library-browser.js   # 音乐、片段、专辑和 Tag 页面
 │   ├── library-import.js    # 导入草稿、进度、超时和取消
 │   ├── player.js           # 播放器与文件重绑
@@ -123,7 +138,8 @@ music-manager/
     │   ├── db.rs            # SQLite 连接 / 建表 / WAL
     │   ├── commands.rs      # 读写命令、音乐与片段数据模型
     │   ├── library_query.rs # SQL 分页、分组与播放顺序查询
-    │   └── library_import.rs # 可取消的目录扫描
+    │   ├── library_import.rs # 可取消的目录扫描
+    │   └── movies.rs        # 电影身份、批量关联及备注写入
     ├── tauri.conf.json
     ├── Cargo.toml
     └── capabilities/
@@ -194,7 +210,9 @@ cargo tauri dev --no-watch -- -- --local-update-test --from-version 0.2.6
 
 测试脚本回归：`python3 scripts/test-local-update.py`，CI 会运行；覆盖环境隔离、版本规划、场景重置/修复、测试库保留及未知应用和符号链接保护。
 
-音乐库交互与导入回归：`node --test scripts/test-library-io.cjs scripts/test-review-regressions.cjs scripts/test-waveform.cjs scripts/test-home-audition.cjs scripts/test-home-navigation.cjs`。覆盖元数据超时与资源释放、导入取消/重试、三项并发上限、大量重复与新文件混合导入、全部重复及待导入草稿保留、Tag 就地移除/二次确认与取消/同名身份/失败重试/并发编辑、波形解码复用与任务优先级、分页响应过期、空状态和删除后的页码回退。测试通过 `scripts/app-source.cjs` 按页面顺序加载拆分后的原生 JS；预览通过 `.preview/library-query.js` 模拟查询返回值，桌面应用使用真实 SQLite。后端命令回归：`cd src-tauri && cargo test --locked --lib commands::`，包含 SQL 页边界、Unicode 搜索、分组计数、标签层级、最近列表、候选及目录环路；不改变数据库 schema。
+音乐库交互与导入回归：`node --test scripts/test-library-io.cjs scripts/test-review-regressions.cjs scripts/test-waveform.cjs scripts/test-home-audition.cjs scripts/test-home-navigation.cjs`。覆盖元数据超时与资源释放、导入取消/重试、三项并发上限、大量重复与新文件混合导入、全部重复及待导入草稿保留、Tag 就地移除/二次确认与取消/同名身份/失败重试/并发编辑、波形解码复用与任务优先级、分页响应过期、空状态和删除后的页码回退，以及专辑／电影目录与详情切换、返回后搜索和页码保留、影片标签原地移除、电影增删改查及失败重试、电影列表直接勾选、空使用记录不占位和筛选菜单键盘操作。测试通过 `scripts/app-source.cjs` 按页面顺序加载拆分后的原生 JS；预览通过 `.preview/library-query.js` 模拟查询返回值，桌面应用使用真实 SQLite。后端命令回归：`cd src-tauri && cargo test --locked --lib commands::`，包含 SQL 页边界、Unicode 搜索、分组计数、标签层级、最近列表、候选及目录环路。电影功能升级到 schema 4，额外运行历史库升级矩阵。
+
+电影交互回归：`node --test --test-name-pattern=movie scripts/test-review-regressions.cjs`；后端关系与分页检查：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib movie`。schema 升级矩阵：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib db::upgrade_tests`，覆盖十六个已发布版本以及 schema 4 重开、缺失新表时备份、WAL、失败回滚和旧 schema 客户端拒绝写入。电影表及关联表的新结构样本为 `src-tauri/tests/fixtures/schema-v4.sql`。
 
 数据库启动与切换的回归检查：`node --test scripts/test-database-switch.cjs`；后端测试：`cd src-tauri && cargo test --locked --lib`。覆盖硬盘未连接、数据库缺失、设置损坏、连接后重试、已有库和 WAL 数据保留、空目录确认创建、无效库拒绝、设置保存失败及切换时的在途操作。
 
@@ -218,7 +236,7 @@ Tauri CLI 按系统、架构和 CLI 版本独立缓存；安装并验证后立�
 
 面板与播放回归从实际按钮事件进入，覆盖列表、详情和片段面板的乱序读取、读取中发生保存或删除、关闭后迟到响应、Finder 同步时切换选择与保留草稿，以及删除当前或无关曲目时保留仍有效的试听和队列位置。详情与片段面板在同一次校验中提交记录和界面；片段编辑器及资料弹窗也会拒绝旧加载、旧保存和旧音频回调影响较新的编辑。
 
-首页现在使用「奶油留白 / 月夜打盹」双主题插画，沙发进入音乐库、地毯进入最近播放、毛线球进入音乐片段。两个主题均有猫咪呼吸、尾尖轻摆及点击轻蹭互动，可关闭并遵循系统减少动态效果偏好。布局和入口说明见 [猫咪首页原型](docs/design/home-scene-layout.md)。回归检查：`node --test scripts/test-home-audition.cjs scripts/test-home-scene.cjs scripts/test-home-scene-motion.cjs`，包含切歌、取消、暂停续播、文件缺失、无唱机播放路径、双主题入口归属及动画生命周期；旧唱机模块保留但不再由应用入口加载。这些检查不替代真实窗口的视觉与交互验收。
+首页现在使用「奶油留白 / 月夜打盹」双主题插画，沙发进入音乐库、毛线球进入音乐片段；“最近”页隐藏期间，地毯不提供跳转。两个主题均有猫咪呼吸、尾尖轻摆及点击轻蹭互动，可关闭并遵循系统减少动态效果偏好。布局和入口说明见 [猫咪首页原型](docs/design/home-scene-layout.md)。回归检查：`node --test scripts/test-home-audition.cjs scripts/test-home-scene.cjs scripts/test-home-scene-motion.cjs`，包含切歌、取消、暂停续播、文件缺失、无唱机播放路径、双主题入口归属及动画生命周期；旧唱机模块保留但不再由应用入口加载。这些检查不替代真实窗口的视觉与交互验收。
 
 ### 打包
 
@@ -248,7 +266,7 @@ DMG 创建遇到 macOS 的 `Resource busy` 时最多尝试 3 次，间隔 2 秒�
 
 ### 常用命令(增删改查)
 
-前端通过 `window.__TAURI__.core.invoke` 调用,完整清单见 `src-tauri/src/commands.rs`:
+前端通过 `window.__TAURI__.core.invoke` 调用。命令定义位于 `src-tauri/src/commands.rs` 及其子模块，注册入口见 `src-tauri/src/lib.rs`：
 
 | 命令 | 作用 |
 |---|---|
@@ -257,12 +275,23 @@ DMG 创建遇到 macOS 的 `Resource busy` 时最多尝试 3 次，间隔 2 秒�
 | `create_music` / `update_music` / `delete_music` / `get_music` / `list_music` | 音乐表 CRUD |
 | `create_clip` / `update_clip` / `delete_clip` / `get_clip` / `list_clips` | 片段表 CRUD |
 | `file_exists` | 判断音频文件是否还在 |
+| `query_library_page` | SQL 分页；新增 `movies`、`music_movie_usages`，支持 `movieId`、`excludeMovieId`、`excludeMusicId`、`movieUsageStatus`，电影目录可通过 `anchorMovieId` 定位所在页 |
+| `get_movie` / `find_movie_by_name` | 读取电影和全表精确片名查重（包含是否已关联当前音乐） |
+| `add_music_movie_usages` / `add_movie_music_usages` | 双向批量关联，返回新增、已关联及音乐已移除的数量 |
+| `create_movie` / `delete_movie` | 独立创建电影（同名复用）；事务删除电影及关联，保留音乐与音频 |
+| `update_movie` / `update_movie_usage` / `delete_movie_usage` | 电影改名、备注编辑、移除使用关联 |
 
 ### 数据模型
 
-数据库为 SQLite(文件 `library.db`,WAL 模式、外键开启)，当前 schema 版本为 `3`。所有 `*_at` 时间字段均为毫秒时间戳(INTEGER)。
+数据库为 SQLite(文件 `library.db`,WAL 模式、外键开启)，当前开发结构的 schema 版本为 `4`。所有 `*_at` 时间字段均为毫秒时间戳(INTEGER)。
 
-旧版 Tag 数据库首次升级时会先通过 SQLite 生成 `library.pre-tag-tree-v1.db` 完整备份；其他结构升级或失败后的再次升级使用唯一命名的 `library.pre-schema-3-*.db`，保留已有备份。全部结构与数据迁移在同一个事务中完成，关联校验通过后才提交。恢复旧应用必须先确认它能读取当前数据库，不自动回滚数据库，也不要直接用旧备份覆盖已经继续编辑过的库。程序检测到高于自身支持范围的 schema 版本时会停止写入。
+旧版 Tag 数据库首次升级时会先通过 SQLite 生成 `library.pre-tag-tree-v1.db` 完整备份；其他结构升级或失败后的再次升级使用唯一命名的 `library.pre-schema-4-*.db`，保留已有备份。全部结构与数据迁移在同一个事务中完成，关联校验通过后才提交。恢复旧应用必须先确认它能读取当前数据库，不自动回滚数据库，也不要直接用旧备份覆盖已经继续编辑过的库。程序检测到高于自身支持范围的 schema 版本时会停止写入。
+
+schema 4 新增电影及使用记录，升级时保留音乐、片段、Tag、候选、播放历史和音频。支持 schema 3 的旧客户端不能写入升级后的库；恢复旧应用前仍须通过数据库兼容性检查。应用版本暂保持 0.2.11，不因开发 schema 变更自动发布新版。
+
+**movies**：`id INTEGER PRIMARY KEY`、`name TEXT`、唯一的 `name_key TEXT`、`created_at / updated_at INTEGER`。`name_key` 仅用于片名查重，关联始终使用 `id`。
+
+**music_movie_usages**：`id INTEGER PRIMARY KEY`、`music_id TEXT`、`movie_id INTEGER`、`note TEXT`、`created_at / updated_at INTEGER`。`(music_id, movie_id)` 唯一；按音乐、电影分别建立创建时间倒序索引。删除音乐级联删除关联。电影外键保持限制删除；删除电影命令先在同一事务中清除关联，再删除电影。
 
 **music**(主键 `id`,音乐元数据;只存路径,不存音频文件本身)
 

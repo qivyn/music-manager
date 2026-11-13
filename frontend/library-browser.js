@@ -1,12 +1,38 @@
 /* SQLite page rendering and library navigation controls. Shared application state lives in app.js. */
 
+function updateLibrarySearch(value) {
+    if (state.currentView === "movies") {
+        if (state.selectedMovieId == null) { state.movieSearch = value.trim();state.pages["movies:groups"] = 1; }
+        else { state.movieMusicSearch = value.trim();state.pages[`movies:music:${state.selectedMovieId}`] = 1; }
+    } else if (state.currentView === "albums") {
+        if (state.catalogSelection == null) { state.albumSearch = value;state.pages["catalog:album:groups"] = 1; }
+        else { state.search = value.trim();state.pages[`catalog:album:${state.catalogSelection}`] = 1; }
+    } else { state.search = value.trim();resetPagination(); }
+}
+
 function updatePageHeader() {
 
     $("viewButtons").classList.toggle(
         "hidden",
-        state.currentView === "clips" || state.currentView === "home"
+        state.currentView === "clips" || state.currentView === "home" || state.currentView === "movies" || (state.currentView === "albums" && state.catalogSelection == null)
     );
-    updateFilterToggleIndicator();
+    updateSidebarFilterIndicator();
+    const movieView = state.currentView === "movies";
+    const directory = isCatalogDirectory();
+    document.body.classList.toggle("catalog-directory-view", directory);
+    $("catalogMovieActionBtn").classList.toggle("hidden", !movieView);
+    $("catalogMovieActionBtn").textContent = directory ? "＋ 新建电影" : "＋ 添加音乐";
+    $("selectionToggleBtn").classList.toggle("hidden", movieView || directory);
+    $("rowPlayToggleBtn").classList.toggle("hidden", directory);
+    $("movieUsageControl").classList.toggle("hidden", movieView || state.currentView === "home" || state.currentView === "clips");
+    syncMovieUsageFilter();
+    const searchScope = movieView ? (directory ? "movie-directory" : `movie:${state.selectedMovieId}`)
+        : state.currentView === "albums" ? (directory ? "album-directory" : `album:${state.catalogSelection}`) : "music";
+    if ($("searchInput").dataset.searchScope !== searchScope) {
+        $("searchInput").dataset.searchScope = searchScope;
+        $("searchInput").value = movieView ? (directory ? state.movieSearch : state.movieMusicSearch)
+            : state.currentView === "albums" && directory ? state.albumSearch : state.search;
+    }
 
     let title = "全部音乐";
     let description = "你的本地音乐素材";
@@ -66,6 +92,9 @@ function updatePageHeader() {
     }
 
 
+    if (movieView) { title = "电影";description = "按电影查看音乐使用记录";searchPlaceholder = directory ? "搜索电影名称" : "搜索本片音乐名、专辑、作者或 Tag"; }
+    else if (state.currentView === "albums" && directory) searchPlaceholder = "搜索专辑名称";
+    else if (state.currentView !== "home") searchPlaceholder += "、电影名";
     $("pageTitle").textContent = title;
     $("pageDescription").textContent = description;
     $("searchInput").placeholder = searchPlaceholder;
@@ -77,7 +106,8 @@ function updatePageHeader() {
 ========================================================= */
 
 function libraryEmptyHTML(kind = "music") {
-    const filtered = Boolean(state.search || state.activeTagIds.length || (kind === "album" && state.albumSearch));
+    const search = kind === "album" && state.catalogSelection == null ? state.albumSearch : state.search;
+    const filtered = Boolean(search || state.activeTagIds.length || state.movieUsageStatus !== "all");
     const recent = state.currentView === "recent";
     const title = filtered ? "没有匹配结果" : recent && state.recentMode === "used" ? "暂无播放记录"
         : kind === "clips" ? "还没有音乐片段" : kind === "tag" ? "还没有 Tag" : kind === "album" ? "还没有专辑" : "还没有音乐";
@@ -91,6 +121,7 @@ function recentModeHTML() {
         <button class="recent-mode-btn ${state.recentMode === "used" ? "active" : ""}" data-recent-mode="used">最近播放</button></div>`;
 }
 async function render() {
+    closeCatalogMenu();
     const version = ++libraryRenderVersion;
     const current = () => version === libraryRenderVersion;
     const leavingHome = document.body.classList.contains("view-home") && state.currentView !== "home";
@@ -100,6 +131,7 @@ async function render() {
     updatePageHeader();
     if (state.player.queueSource === "home" && state.currentView !== "home") await refreshHomeQueue();
     if (!current()) return;
+    if (state.currentView === "movies") { await renderMoviesView(current);return; }
     const query = libraryFilters();
     if (state.currentView === "home") {
         const page = await requestLibraryPage({ kind: "music", newest: true }, "home", 10);
@@ -166,7 +198,7 @@ async function renderTagResults(tagId, query, current) {
     const musicRows = (state.tagResultTab === "music" ? page.items : []).map(item => `
         <div class="music-row" data-music-id="${item.id}">
             <div class="music-icon">${musicArtwork(item)}</div>
-            <div class="music-main"><div class="music-name">${escapeHTML(item.name)}</div><div class="music-meta"><span>${formatTime(item.duration)}</span>${item.album ? `<span>专辑：${escapeHTML(item.album)}</span>` : ""}</div><div class="music-tags">${renderAssignedTags(item, "music")} </div></div>
+            <div class="music-main"><div class="music-name">${escapeHTML(item.name)}</div><div class="music-meta"><span>${formatTime(item.duration)}</span>${item.album ? `<span>专辑：${escapeHTML(item.album)}</span>` : ""}</div><div class="music-tags">${renderInlineMusicTags(item)}</div>${renderMovieSummary(item)}</div>
             <div class="music-actions"><button class="icon-action" data-action="play" data-id="${item.id}" title="试听">▶</button><button class="icon-action info-strong" data-action="info" data-id="${item.id}" title="详情">ⓘ</button></div>
         </div>`).join("");
     const clipRows = (state.tagResultTab === "clips" ? page.items : []).map(({ clip, music: parent }) => {
@@ -197,7 +229,51 @@ async function renderTagResults(tagId, query, current) {
    左侧分类列表 + 右侧对应音乐
 ========================================================= */
 
+function isCatalogDirectory() {
+    return (state.currentView === "albums" && state.catalogSelection == null)
+        || (state.currentView === "movies" && state.selectedMovieId == null);
+}
+
+function restoreDirectoryScroll(view) {
+    if (state.currentView !== view || !isCatalogDirectory()) return;
+    const area = document.querySelector(".main-scroll-area");
+    if (area) area.scrollTop = view === "movies" ? state.movieDirectoryScroll || 0 : state.albumDirectoryScroll || 0;
+}
+
+async function renderAlbumView(query, isCurrent) {
+    const album = state.catalogSelection;
+    if (album == null) {
+        const key = "catalog:album:groups";
+        const page = await requestLibraryPage({ ...query, search: "", kind: "albums", albumSearch: state.albumSearch }, key, COMPACT_PAGE_SIZE);
+        if (!isCurrent()) return;
+        acceptLibraryPage(page, key);
+        visibleQueueMusic = []; visibleClipIds = [];
+        $("resultInfo").textContent = `${page.total} 张专辑`;
+        $("contentArea").innerHTML = `<section class="catalog-directory" aria-label="专辑目录">
+            <div class="catalog-directory-columns" aria-hidden="true"><span>专辑名称</span><span>音乐数量</span><span></span></div>
+            <div class="catalog-directory-list">${page.items.map(item => `<div class="catalog-directory-row"><button type="button" class="catalog-directory-open" data-catalog-key="${escapeHTML(item.key)}" title="${escapeHTML(item.label || item.key)}"><span class="catalog-directory-icon" aria-hidden="true">♫</span><span class="catalog-directory-name">${escapeHTML(item.label || item.key)}</span><span class="catalog-directory-count">${item.count} 首</span></button>${catalogActionsHTML("album", item)}</div>`).join("") || libraryEmptyHTML("album")}</div>
+            ${catalogPaginationHTML(page, key, "张专辑")}</section>`;
+        renderSelectionToolbar();
+        return;
+    }
+    const key = `catalog:album:${album}`;
+    const page = await requestLibraryPage({ ...query, kind: "music", album }, key);
+    if (!isCurrent()) return;
+    acceptLibraryPage(page, key);
+    visibleQueueMusic = page.items; visibleClipIds = [];
+    $("resultInfo").textContent = `${page.total} 首音乐`;
+    if (state.layout === "grid") renderGrid(page.items, []); else renderList(page.items, []);
+    const music = $("contentArea").innerHTML;
+    $("contentArea").innerHTML = `<section class="catalog-record-page"><nav class="catalog-breadcrumb" aria-label="当前位置"><button type="button" class="text-btn catalog-back" data-back-album-directory aria-label="返回专辑目录">‹ 专辑</button><span class="catalog-breadcrumb-separator" aria-hidden="true">/</span><span class="catalog-current-name" title="${escapeHTML(album || "未设置专辑")}">${escapeHTML(album || "未设置专辑")}</span>${catalogActionsHTML("album", { key: album })}</nav>
+        ${album ? `<div class="catalog-detail-tags">${renderAlbumTags(album)}</div>` : ""}
+        ${page.items.length ? music : '<div class="empty-state"><div class="empty-title">没有匹配的音乐</div><div class="empty-description">可以调整搜索或筛选条件，或返回专辑目录</div></div>'}
+        ${catalogPaginationHTML(page, key, "首音乐")}</section>`;
+    renderSelectionToolbar();syncPlayerQueue();
+    await hydrateVisibleArtwork(page.items);
+}
+
 async function renderCatalogView(type, query, isCurrent) {
+    if (type === "album") return renderAlbumView(query, isCurrent);
     const catalogPageKey = `catalog:${type}:groups`;
     const catalogPage = await requestLibraryPage({ ...query, kind: type === "album" ? "albums" : "tags", albumSearch: state.albumSearch }, catalogPageKey, COMPACT_PAGE_SIZE);
     if (!isCurrent()) return;
@@ -309,6 +385,7 @@ async function renderCatalogView(type, query, isCurrent) {
                         </div>
 
                         <div class="music-tags">${renderInlineMusicTags(item)}</div>
+                        ${renderMovieSummary(item)}
 
                     </div>
 
@@ -548,6 +625,7 @@ function renderList(music, clips) {
                         </div>
 
                         <div class="music-tags">${renderInlineMusicTags(item)}</div>
+                        ${renderMovieSummary(item)}
 
                     </div>
 
@@ -688,10 +766,10 @@ function renderMusicCards(music, clips) {
 
                     <div class="card-tags">
 
-                        ${renderAssignedTags(item, "music")}
+                        ${renderInlineMusicTags(item)}
 
                     </div>
-
+                    ${renderMovieSummary(item)}
                 </div>
 
             `;
@@ -716,9 +794,9 @@ function renderGrid(music, clips) {
    音乐详情
 ========================================================= */
 
-function paginationHTML(result, key, noun = "项") {
-    if (result.total <= PAGE_SIZE_OPTIONS[0]) return "";
-    const compact = key === "candidates" || key === "import:albums" || key.startsWith("music-clips:") || key.endsWith(":groups");
+function paginationHTML(result, key, noun = "项", options = {}) {
+    if (!options.always && result.total <= PAGE_SIZE_OPTIONS[0]) return "";
+    const compact = options.compact ?? (key === "candidates" || key === "import:albums" || key.startsWith("music-clips:") || key.startsWith("movie-usages:") || key.endsWith(":groups"));
     const sizeOptions = PAGE_SIZE_OPTIONS.map(size =>
         `<option value="${size}" ${size === result.pageSize ? "selected" : ""}>${compact ? `${size} / 页` : `每页 ${size}`}</option>`
     ).join("");

@@ -6214,14 +6214,6 @@ body[data-theme="sky"] .tag-result-tab,
 body[data-theme="sky"] .tag-page-item,
 body[data-theme="sky"] .tag-drop-zone { color: var(--tag-text); background: var(--tag); border-color: rgba(95,174,195,.24); border-radius: 99px; }
 
-/* 筛选面板的 Tag 需要比列表内的 Tag 更易扫读。 */
-#filterPanel .active-filter-tag {
-    font-size: 13px;
-    padding: 5px 10px;
-    min-height: 0;
-    line-height: 1.25;
-}
-
 body[data-theme="sky"] .music-actions { opacity: 1; }
 body[data-theme="sky"] .icon-action,
 body[data-theme="sky"] .icon-btn { color: var(--primary-strong); background: rgba(255,255,255,.82); border-color: var(--border-strong); border-radius: 9px; }
@@ -6763,7 +6755,7 @@ body.sidebar-collapsed .sidebar-controls {
 
 body.sidebar-collapsed .sidebar-collapse-btn > span:last-child,
 body.sidebar-collapsed .sidebar-title,
-body.sidebar-collapsed .nav-item > span:not(:first-child),
+body.sidebar-collapsed .sidebar .nav-item > span:not(:first-child),
 body.sidebar-collapsed .empty-small {
     display: none;
 }
@@ -6777,18 +6769,101 @@ body.sidebar-collapsed .sidebar-collapse-btn > span:first-child {
     transform: rotate(180deg);
 }
 
-body.sidebar-collapsed .nav-item {
+body.sidebar-collapsed .sidebar .nav-item {
     justify-content: center;
     padding-right: 0;
     padding-left: 0;
 }
 
-body.sidebar-collapsed .nav-item.active::before {
+body.sidebar-collapsed .sidebar .nav-item.active::before {
     left: -10px;
 }
 
 body.sidebar-collapsed .topbar::after {
     left: 68px;
+}
+
+.sidebar-controls { position: relative; }
+.sidebar-filter-count {
+    position: absolute;
+    top: -7px;
+    right: 0;
+    min-width: 18px;
+    padding: 2px 4px;
+    border-radius: 99px;
+    background: var(--primary);
+    color: var(--bg);
+    font-size: 10px;
+    text-align: center;
+    pointer-events: none;
+}
+/* Compact album/movie directories share one name/count/action alignment. */
+.catalog-directory-columns { display: grid; grid-template-columns: minmax(0,1fr) 76px 40px; align-items: center; gap: 10px; padding: 0 10px 10px; border-bottom: 1px solid var(--border); color: var(--subtext); font-size: 11px; }
+.catalog-directory-columns > span:nth-child(2) { text-align: right; }
+.catalog-directory-list { background: transparent; }
+.catalog-directory-row { display: grid; grid-template-columns: minmax(0,1fr) 40px; align-items: center; gap: 10px; min-height: 52px; padding-right: 10px; border-bottom: 1px solid var(--border); }
+.catalog-directory-row:hover, .catalog-directory-row:focus-within { background: var(--hover); }
+.catalog-directory-open { display: grid; grid-template-columns: 28px minmax(0,1fr) 76px; align-items: center; gap: 12px; min-width: 0; min-height: 51px; padding: 8px 0 8px 10px; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.catalog-directory-open:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.catalog-directory-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-directory-count { text-align: right; color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
+.catalog-directory-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; color: var(--primary); background: var(--primary-light); font-size: 16px; }
+.catalog-actions { position: relative; flex: 0 0 40px; }
+.catalog-more, .catalog-more-spacer { width: 36px; height: 32px; }
+.catalog-more { display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--subtext); font-size: 22px; cursor: pointer; }
+.catalog-more:is(:hover, [aria-expanded="true"]) { background: var(--primary-light); color: var(--primary-strong); }
+.catalog-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.catalog-actions .catalog-menu { width: 176px; right: 0; top: calc(100% + 5px); padding: 6px; z-index: 60; }
+.catalog-actions.opens-up .catalog-menu { top: auto; bottom: calc(100% + 5px); }
+.catalog-breadcrumb { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-width: 0; }
+.catalog-breadcrumb .catalog-back { flex-shrink: 0; padding: 5px 0; }
+.catalog-breadcrumb-separator { color: var(--subtext); }
+.catalog-current-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.catalog-record-page > .catalog-detail-tags { margin-bottom: 18px; }
+.catalog-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--subtext); font-size: 12px; }
+.catalog-footer > span { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.catalog-footer .pagination { margin: 0 0 0 auto; padding: 0; }
+.catalog-footer .pagination-size { order: -1; }
+.catalog-toolbar-action { margin-left: auto; }
+body.catalog-directory-view .toolbar .search-box { flex: 1 1 320px; min-width: 210px; max-width: 560px; }
+@media (hover: hover) and (pointer: fine) {
+    .catalog-directory-row .catalog-more { opacity: 0; }
+    .catalog-directory-row:is(:hover, :focus-within) .catalog-more,
+    .catalog-directory-row .catalog-more[aria-expanded="true"] { opacity: 1; }
+}
+@media (pointer: coarse) {
+    .catalog-more { min-width: 40px; min-height: 44px; }
+}
+
+/* Keep quick additions quiet without removing keyboard or touch access. */
+@media (hover: hover) and (pointer: fine) {
+    :is(.music-row, .music-card) .music-quick-actions,
+    .catalog-detail-tags > .quick-tag-button { opacity: 0; pointer-events: none; }
+    :is(.music-row, .music-card):is(:hover, :focus-within) .music-quick-actions,
+    .catalog-detail-tags:is(:hover, :focus-within) > .quick-tag-button {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+.music-quick-actions { display: inline-flex; align-items: center; gap: 8px; }
+.music-quick-actions .movie-record-button {
+    margin: 0;
+    height: 22px;
+    padding: 0 8px;
+    font: 700 10px/1 var(--font-ui);
+    border: 1px dashed var(--border-strong);
+    border-radius: 3px;
+    color: var(--subtext);
+}
+.music-quick-actions .movie-record-button:is(:hover, :focus-visible) {
+    color: var(--primary-strong);
+    border-color: var(--primary);
+}
+.main-scroll-area :is(.music-row:hover, .music-row:focus-within) .music-tags,
+.main-scroll-area .music-tags:has(.quick-tag-editor) {
+    max-height: none;
+    flex-wrap: wrap;
+    overflow: visible;
 }
 
 /* 导航与 Tag 都使用同一枚椭圆数量徽标。 */
@@ -6945,24 +7020,6 @@ body.sidebar-collapsed .topbar::after {
 
 .catalog-music-grid {
     min-width: 0;
-}
-
-/* 收起筛选面板后，仍以醒目标记提示当前有 Tag 条件生效。 */
-.filter-active-indicator {
-    width: 8px;
-    height: 8px;
-    flex: 0 0 8px;
-    border-radius: 50%;
-    background: var(--primary);
-    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--primary);
-}
-
-.filter-active-indicator.hidden {
-    display: none;
-}
-
-#filterToggleBtn.has-active-filters {
-    border-color: var(--primary);
 }
 
 /* 图标操作统一显示即时提示，避免只靠图形猜测用途。 */

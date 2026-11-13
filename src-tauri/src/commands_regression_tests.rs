@@ -303,3 +303,108 @@ fn sql_search_preserves_alphabetical_tag_phrases() {
     let q = LibraryQuery { kind: "music".into(), search: "Alpha Zulu".into(), ..Default::default() };
     assert_eq!(query_page_in(&conn, &q).unwrap().total, 1);
 }
+
+#[test]
+fn movie_catalog_crud_preserves_music_and_rolls_back_failed_deletion() {
+    use super::movies::*;
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir, mut conn) = library();
+    seed_music(&conn, "one", "Album");
+    seed_music(&conn, "two", "Album");
+    assert!(create_movie_in(&mut conn, "  ").is_err());
+    let movie = create_movie_in(&mut conn, "  ＡＢＣ ").unwrap();
+    assert_eq!(movie.music_count, 0);
+    assert_eq!(create_movie_in(&mut conn, "abc").unwrap().id, movie.id);
+    add_music_in(&mut conn, movie.id, &["one".into(), "two".into()], "note").unwrap();
+    let other = create_movie_in(&mut conn, "Other").unwrap();
+    add_music_in(&mut conn, other.id, &["one".into()], "keep").unwrap();
+    rename_movie_in(&conn, movie.id, "Renamed").unwrap();
+    assert!(rename_movie_in(&conn, movie.id, "other").is_err());
+    conn.execute_batch("CREATE TRIGGER reject_movie_delete BEFORE DELETE ON movies BEGIN SELECT RAISE(ABORT,'blocked'); END;").unwrap();
+    assert!(delete_movie_in(&mut conn, movie.id).is_err());
+    assert_eq!(get_movie_in(&conn, movie.id).unwrap().unwrap().music_count, 2);
+    conn.execute_batch("DROP TRIGGER reject_movie_delete;").unwrap();
+    delete_movie_in(&mut conn, movie.id).unwrap();
+    delete_movie_in(&mut conn, movie.id).unwrap();
+    assert!(get_movie_in(&conn, movie.id).unwrap().is_none());
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM music", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    assert_eq!(get_movie_in(&conn, other.id).unwrap().unwrap().music_count, 1);
+    assert_eq!(conn.query_row("SELECT note FROM music_movie_usages", [], |r| r.get::<_, String>(0)).unwrap(), "keep");
+    let page = query_page_in(&conn, &LibraryQuery { kind: "movies".into(), page: 4, page_size: 1, ..Default::default() }).unwrap();
+    assert_eq!((page.total, page.page, page.items.len()), (1, 1, 1));
+    let page = query_page_in(&conn, &LibraryQuery { kind: "music".into(), search: "one".into(), ..Default::default() }).unwrap();
+    let usage_id = page.items[0]["moviePreview"][0]["usageId"].as_i64().unwrap();
+    assert_eq!(conn.query_row("SELECT movie_id FROM music_movie_usages WHERE id=?1", [usage_id], |r| r.get::<_, i64>(0)).unwrap(), other.id);
+}
+
+#[test]
+fn movie_usage_writes_reuse_names_preserve_notes_and_roll_back_creation() {
+    use super::movies::*;
+    let (_dir,mut conn)=library();seed_music(&conn,"one","A");seed_music(&conn,"two","A");
+    let result=add_movies_in(&mut conn,"one",&[],&["  ＡＢＣ  ".into(),"abc".into()]," First note ").unwrap();
+    assert_eq!(result.added,1);
+    let found=find_movie_in(&conn,"ABC",Some("one")).unwrap().unwrap();
+    assert!(found.already_linked);assert_eq!(found.movie.music_count,1);
+    let id=found.movie.id;
+    assert!(!find_movie_in(&conn,"abc",Some("two")).unwrap().unwrap().already_linked);
+    let result=add_music_in(&mut conn,id,&["one".into(),"two".into(),"gone".into(),"two".into()],"Shared note").unwrap();
+    assert_eq!((result.added,result.already_linked,result.missing_music),(1,1,1));
+    assert_eq!(conn.query_row("SELECT note FROM music_movie_usages WHERE music_id='one'",[],|r|r.get::<_,String>(0)).unwrap(),"First note");
+    rename_movie_in(&conn,id,"改名后的电影").unwrap();
+    assert_eq!(get_movie_in(&conn,id).unwrap().unwrap().music_count,2);
+    add_movies_in(&mut conn,"one",&[],&["Other".into()],"").unwrap();
+    assert!(rename_movie_in(&conn,id,"ＯＴＨＥＲ").is_err());
+    conn.execute_batch("CREATE TRIGGER fail_movie_usage BEFORE INSERT ON music_movie_usages WHEN NEW.note='fail' BEGIN SELECT RAISE(ABORT,'write failed'); END;").unwrap();
+    let count: i64=conn.query_row("SELECT COUNT(*) FROM movies",[],|r|r.get(0)).unwrap();
+    assert!(add_movies_in(&mut conn,"one",&[],&["Must roll back".into()],"fail").is_err());
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM movies",[],|r|r.get::<_,i64>(0)).unwrap(),count);
+    assert!(add_movies_in(&mut conn,"missing",&[],&["No orphan".into()],"").is_err());
+    conn.execute("DELETE FROM music WHERE id='one'",[]).unwrap();
+    assert_eq!(get_movie_in(&conn,id).unwrap().unwrap().music_count,1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM movies",[],|r|r.get::<_,i64>(0)).unwrap(),count);
+    conn.execute("DELETE FROM music_movie_usages WHERE movie_id=?1",[id]).unwrap();
+    assert_eq!(get_movie_in(&conn,id).unwrap().unwrap().music_count,0);
+    assert!(get_movie_in(&conn,id).unwrap().is_some());
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM music WHERE id='two'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+}
+
+#[test]
+fn movie_and_music_candidates_page_in_sql_and_exclude_only_the_current_pair() {
+    use super::library_query::{query_page_in,LibraryQuery};
+    use super::movies::*;
+    let (_dir,mut conn)=library();
+    for i in 0..165 {seed_music(&conn,&format!("m{i:03}"),"Album");}
+    let mut movies=Vec::new();
+    for i in 0..137 {
+        let name=format!("Film {i:03}");
+        conn.execute("INSERT INTO movies(name,name_key,created_at,updated_at) VALUES(?1,?2,1,1)",params![name,name.to_lowercase()]).unwrap();
+        movies.push(conn.last_insert_rowid());
+    }
+    for i in 0..45 {conn.execute("INSERT INTO music_movie_usages(music_id,movie_id,created_at,updated_at) VALUES('m000',?1,1,1)",[movies[i]]).unwrap();}
+    for i in 20..75 {conn.execute("INSERT INTO music_movie_usages(music_id,movie_id,created_at,updated_at) VALUES('m001',?1,1,1)",[movies[i]]).unwrap();}
+    let q=LibraryQuery {kind:"movies".into(),exclude_music_id:Some("m000".into()),page:3,page_size:10,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();
+    assert_eq!((page.total,page.page,page.items.len()),(92,3,10));
+    assert_eq!(page.items[0]["name"],"Film 065");assert_eq!(page.items[0]["musicCount"],1);
+    assert!(find_movie_in(&conn,"film 000",Some("m000")).unwrap().unwrap().already_linked);
+    let normalized=LibraryQuery{kind:"movies".into(),search:"ＦＩＬＭ ０６".into(),..Default::default()};
+    assert_eq!(query_page_in(&conn,&normalized).unwrap().total,10);
+    let q=LibraryQuery {kind:"movies".into(),anchor_movie_id:Some(movies[130]),page_size:30,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.page,5);assert!(page.items.iter().any(|m|m["id"]==movies[130]));
+    let q=LibraryQuery {kind:"music".into(),search:"Film 01".into(),..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!(page.total,1);
+    assert_eq!(page.items[0]["movieCount"],45);assert_eq!(page.items[0]["moviePreview"].as_array().unwrap().len(),2);
+    assert_eq!(page.items[0]["moviePreview"][0]["name"],"Film 044");
+    let q=LibraryQuery {kind:"music_movie_usages".into(),music_id:Some("m000".into()),page:4,page_size:10,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!((page.total,page.items.len()),(45,10));assert_eq!(page.items[0]["movieName"],"Film 014");
+    let ids=(0..120).map(|i|format!("m{i:03}")).collect::<Vec<_>>();add_music_in(&mut conn,movies[0],&ids,"same note").unwrap();
+    add_movies_in(&mut conn,"m150",&[movies[5]],&[],"").unwrap();
+    let mut q=LibraryQuery {kind:"music".into(),exclude_movie_id:Some(movies[0]),page:4,page_size:10,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!((page.total,page.items.len()),(45,10));assert_eq!(page.items[0]["id"],"m150");
+    q.search="m150".into();let page=query_page_in(&conn,&q).unwrap();assert_eq!((page.total,page.page),(1,1));
+    q.search="no match".into();let page=query_page_in(&conn,&q).unwrap();assert_eq!((page.total,page.page),(0,1));
+    let q=LibraryQuery {kind:"music".into(),movie_usage_status:"unrecorded".into(),..Default::default()};
+    assert_eq!(query_page_in(&conn,&q).unwrap().total,44);
+    let q=LibraryQuery {kind:"music".into(),movie_id:Some(movies[0]),page_size:50,..Default::default()};
+    let page=query_page_in(&conn,&q).unwrap();assert_eq!((page.total,page.items.len()),(120,50));assert!(page.items.iter().all(|m|m["movieUsageId"].is_number()));
+}

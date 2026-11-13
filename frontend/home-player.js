@@ -4,7 +4,6 @@ function goToViewFromHome(view, options = {}) {
     state.search = "";
     $("searchInput").value = "";
     state.activeTagIds = [];
-    renderFilterPanel();
     renderSidebarTags();
     return navigateToView(view, options);
 }
@@ -13,12 +12,20 @@ let viewNavigationVersion = 0;
 
 async function navigateToView(view, { focusSearch = false } = {}) {
     if (!view) return;
+    if (view === "recent") view = "all"; // The Recent page is temporarily hidden.
     const version = ++viewNavigationVersion;
     const previousFocus = document.activeElement;
     document.querySelectorAll(".nav-item").forEach(button => {
         button.classList.toggle("active", button.dataset.view === view);
     });
     state.currentView = view;
+    closeMovieUsageFilter();
+    if (view === "movies") { state.selectedMovieId = null; state.movieDirectoryScroll = 0; }
+    if (view === "albums") state.albumDirectoryScroll = 0;
+    if (view === "movies") {
+        state.selectionMode = false;
+        state.selectedMusicIds.clear();state.selectedClipIds.clear();
+    }
     state.catalogSelection = null;
     resetPagination();
     closeMusicContextPanels();
@@ -98,8 +105,7 @@ function renderHome(music, clips) {
     scrollMainContentToTop();
     window.HomeScene.mount($("homeScene"), {
         navigate(destination) {
-            if (destination === "recent") state.recentMode = "used";
-            goToViewFromHome({ library: "all", recent: "recent", clips: "clips" }[destination]);
+            goToViewFromHome({ library: "all", clips: "clips" }[destination]);
         }
     });
     $("contentArea").querySelector('[data-home-action="import"]')?.addEventListener("click", () => $("importBtn").click());

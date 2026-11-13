@@ -80,6 +80,10 @@ let state = {
     currentView: "home",
     search: "",
     albumSearch: "",
+    movieSearch: "",
+    movieMusicSearch: "",
+    selectedMovieId: null,
+    movieUsageStatus: "all",
     layout: "list",
     tagResultTab: null,
     recentMode: "added",
@@ -102,6 +106,8 @@ let state = {
     candidatePage: 1,
 
     catalogSelection: null,
+    albumDirectoryScroll: 0,
+    movieDirectoryScroll: 0,
 
     selectedMusic: null,
     clipsPanelMusic: null,
@@ -159,12 +165,10 @@ let tagRecordsCache = [];
 /* 专辑名 → [tagId]。专辑没有独立实体，Tag 关联按专辑名存（后端 album_tags 表）。 */
 let albumTagsCache = new Map();
 let searchRenderTimer = null;
-let albumFilterTimer = null;
 /* 双击判定（J/L shuttle） */
 let lastShuttleKey = null;
 let lastShuttleAt = 0;
 /* IME（中文/日文输入法）组词期间不入库筛选，避免拼音串先触发重渲染把候选框顶掉 */
-let albumFilterComposing = false;
 const libraryCache = { versions: { music: 0, clips: 0 } };
 const coverArtCache = new Map();
 const PAGE_SIZE = 50;
@@ -296,10 +300,10 @@ function setSidebarCollapsed(collapsed, { persist = true } = {}) {
 
     const button = $("sidebarCollapseBtn");
     button.setAttribute("aria-expanded", String(!collapsed));
-    button.title = collapsed ? "展开导航" : "收起导航";
+    updateSidebarFilterIndicator();
     button.querySelector("span:last-child").textContent = collapsed
-        ? "展开导航"
-        : "收起导航";
+        ? "展开 Tag 筛选"
+        : "收起 Tag 筛选";
 
     if (persist) {
         try {
@@ -706,7 +710,7 @@ function renderInlineMusicTags(item) {
         `<optgroup label="${escapeHTML(category)}">${categoryTags.map(tag => `<option value="${tag.id}">#${escapeHTML(tag.path)}</option>`).join("")}</optgroup>`
     ).join("");
 
-    return `${tags}<button class="quick-tag-button" data-action="quick-tag" data-id="${item.id}" title="为这首音乐添加 Tag">＋ Tag</button>${editing ? `<span class="quick-tag-editor"><select data-quick-tag-select data-id="${item.id}" aria-label="选择已有 Tag"><option value="">选择已有 Tag</option>${options}</select><input data-quick-tag-input="${item.id}" type="text" placeholder="新 Tag，按 Enter" aria-label="输入新 Tag"><button data-action="quick-tag-save" data-id="${item.id}" title="保存新 Tag">添加</button></span>` : ""}`;
+    return `${tags}<span class="music-quick-actions"><button class="quick-tag-button" data-action="quick-tag" data-id="${item.id}" title="为这首音乐添加 Tag">＋ Tag</button><button type="button" class="movie-record-button" data-movie-action="add-movies" data-music-id="${escapeHTML(item.id)}" title="记录这首音乐用于哪些电影">＋ 影片</button></span>${editing ? `<span class="quick-tag-editor"><select data-quick-tag-select data-id="${item.id}" aria-label="选择已有 Tag"><option value="">选择已有 Tag</option>${options}</select><input data-quick-tag-input="${item.id}" type="text" placeholder="新 Tag，按 Enter" aria-label="输入新 Tag"><button data-action="quick-tag-save" data-id="${item.id}" title="保存新 Tag">添加</button></span>` : ""}`;
 }
 
 async function saveQuickTag(musicId, rawValue, tagId = null) {
@@ -736,7 +740,7 @@ async function saveQuickTag(musicId, rawValue, tagId = null) {
     if (!music) return;
     state.quickTagMusicId = null;
     if (applicationUpdateInProgress) return;
-    await refreshWhileInteractive(updateCounts, renderSidebarTags, renderFilterPanel, renderPreservingScroll);
+    await refreshWhileInteractive(updateCounts, renderSidebarTags, renderPreservingScroll);
     if (!applicationUpdateInProgress) showToast(duplicate ? "该 Tag 已添加" : `已添加 #${tag}`);
 }
 
@@ -810,7 +814,6 @@ async function saveAlbumQuickTag(album, rawValue, tagId = null) {
     state.quickTagAlbumKey = null;
     await updateCounts();
     await renderSidebarTags();
-    await renderFilterPanel();
     await renderPreservingScroll();
     showToast(`已添加 #${tag}`);
 }
@@ -982,7 +985,6 @@ async function commitTagDraft(input) {
     } finally {
         state.tagDraftSaving = false;
         await renderSidebarTags();
-        await renderFilterPanel();
         await render();
     }
 }
@@ -1083,6 +1085,7 @@ const CHEVRON_SVG = '<svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"
 
 async function renderSidebarTags() {
 
+    updateSidebarFilterIndicator();
     const container = $("sidebarTags");
 
     const tags = await getAllTagRecords();
@@ -1207,6 +1210,7 @@ async function renderSidebarTags() {
             : `<div class="empty-small">暂无 Tag</div>`;
     };
 
+    cancelSidebarTagDrag();
     container.innerHTML = `<div class="sidebar-tag-tree${state.sidebarTagManage ? " is-managing" : ""}">` +
         [...groups.values()].map(category => {
             const key = `c:${category.id}`;
@@ -1304,44 +1308,27 @@ function renderTagPickerGroups({ exclude = [], excludeIds = [], query = "", attr
     `).join("");
 }
 
-async function renderFilterPanel() {
-    if (state.tagPointerDrag) {
-        const drag = state.tagPointerDrag;
-        drag.tagElement?.classList.remove("is-dragging");
-        drag.ghost?.remove();
-        document.querySelectorAll("#sidebarTags .is-drop-target")
-            .forEach(item => item.classList.remove("is-drop-target"));
-        state.draggingTagId = null;
-        state.tagPointerDrag = null;
-        showToast("拖拽已取消");
-    }
-    updateFilterToggleIndicator();
-    $("activeFilterTags").innerHTML = state.activeTagIds.map(id => {
-        const tag = tagRecordsCache.find(item => item.id === id);
-        return tag ? `<button class="active-filter-tag" data-filter-tag-id="${id}">#${escapeHTML(tag.path)} ×</button>` : "";
-    }
-    ).join("");
-    /* 面板只负责「看当前选了什么 + 一键清掉」。Tag 树是侧栏的活，
-       这里不再重复渲染一份（收起侧栏时面板仍可用）。 */
-    $("filterEmptyHint").classList.toggle("hidden", state.activeTagIds.length > 0);
+function cancelSidebarTagDrag() {
+    const drag = state.tagPointerDrag;
+    if (!drag) return;
+    drag.tagElement?.classList.remove("is-dragging");
+    drag.ghost?.remove();
+    document.querySelectorAll("#sidebarTags .is-drop-target")
+        .forEach(item => item.classList.remove("is-drop-target"));
+    state.draggingTagId = null;
+    state.tagPointerDrag = null;
+    showToast("拖拽已取消");
 }
 
-function updateFilterToggleIndicator() {
-    const button = $("filterToggleBtn");
-    const indicator = $("filterActiveIndicator");
-    const hasActiveTags = state.activeTagIds.length > 0;
-
-    indicator.classList.toggle("hidden", !hasActiveTags);
-    button.classList.toggle("has-active-filters", hasActiveTags);
-    button.title = hasActiveTags
-        ? `筛选中：已选择 ${state.activeTagIds.length} 个 Tag`
-        : "筛选 Tag";
-    button.setAttribute(
-        "aria-label",
-        hasActiveTags
-            ? `筛选，已选择 ${state.activeTagIds.length} 个 Tag`
-            : "筛选 Tag"
-    );
+function updateSidebarFilterIndicator() {
+    const count = state.activeTagIds.length;
+    const collapsed = document.body.classList.contains("sidebar-collapsed");
+    const button = $("sidebarCollapseBtn");
+    const label = `${collapsed ? "展开" : "收起"} Tag 筛选${count ? `（已选 ${count} 个）` : ""}`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    $("sidebarFilterCount").textContent = String(count);
+    $("sidebarFilterCount").classList.toggle("hidden", !count);
 }
 
 function setActiveTag(tagId) {
@@ -1352,7 +1339,6 @@ function setActiveTag(tagId) {
         : [...state.activeTagIds, tagId];
     resetPagination();
     renderSidebarTags();
-    renderFilterPanel();
     render();
 }
 
@@ -1433,7 +1419,7 @@ function renderMusicClipsContext({ music, clips }) {
 ========================================================= */
 
 async function deleteMusic(music, id) {
-    if (!await confirm(`确定删除「${music?.name || "这首音乐"}」吗？\n它的片段也会一起删除。`)) return;
+    if (!await confirm(`确定删除「${music?.name || "这首音乐"}」吗？\n它的片段和电影使用记录也会一起删除，电影和原始音频会保留。`)) return;
     await deleteLibraryEntries("music", [id || music.id]);
     showToast("已删除");
 }
@@ -1480,6 +1466,8 @@ function closeMusicContextPanels() {
 ========================================================= */
 
 function setupEvents() {
+    setupCatalogControls();
+    setupMovieUsageEvents();
     setupClipEditorControls();
 
     // Finder 完成改名后，用户切回应用即自动同步并刷新已渲染的专辑。
@@ -1501,7 +1489,11 @@ function setupEvents() {
         state.pages[key] = 1;
         savePageSizes();
 
-        if (key.startsWith("import:")) {
+        if (key.startsWith("movie-dialog:")) {
+            if (movieDialog?.mode === "music") await loadMoviePickerPage(movieDialog);
+        } else if (key.startsWith("movie-usages:")) {
+            await renderMusicMovieUsages();
+        } else if (key.startsWith("import:")) {
             await renderSelectedFiles();
         } else if (key === "candidates") {
             await renderCandidatePanel();
@@ -1510,7 +1502,7 @@ function setupEvents() {
             else if (state.selectedMusic) await openDetail(state.selectedMusic.id);
         } else {
             await render();
-            if (key.startsWith("catalog:")) {
+            if (key.startsWith("catalog:tag:")) {
                 restoreCatalogScroll({
                     list: key.endsWith(":groups") ? 0 : listScroll,
                     detail: 0
@@ -1842,55 +1834,20 @@ function setupEvents() {
 
     /* 搜索 */
 
-    $("searchInput")
-        .addEventListener(
-            "input",
-            event => {
-
-                state.search =
-                    event.target.value
-                        .trim();
-                resetPagination();
-                clearTimeout(searchRenderTimer);
-                searchRenderTimer = setTimeout(() => render(), 160);
-            }
-        );
-
-
-    $("clearSearch")
-        .addEventListener(
-            "click",
-            () => {
-
-                $("searchInput").value =
-                    "";
-
-                state.search = "";
-                resetPagination();
-                render();
-            }
-        );
-
-    $("filterToggleBtn").addEventListener("click", () => {
-        const panel = $("filterPanel");
-        panel.classList.toggle("hidden");
-        $("filterToggleBtn").setAttribute("aria-expanded", String(!panel.classList.contains("hidden")));
-        renderFilterPanel();
-    });
-
-    $("activeFilterTags").addEventListener("click", event => {
-        const button = event.target.closest("[data-filter-tag-id]");
-        if (button) setActiveTag(button.dataset.filterTagId);
-    });
-
-    $("clearFiltersBtn").addEventListener("click", () => {
-        state.activeTagIds = [];
-        state.search = "";
-        resetPagination();
+    const scheduleLibrarySearch = event => {
+        if (event.isComposing) return;
+        updateLibrarySearch(event.target.value);
+        libraryRenderVersion++;
+        clearTimeout(searchRenderTimer);
+        searchRenderTimer = setTimeout(() => render().catch(console.error), 160);
+    };
+    $("searchInput").addEventListener("input", scheduleLibrarySearch);
+    $("searchInput").addEventListener("compositionend", scheduleLibrarySearch);
+    $("clearSearch").addEventListener("click", () => {
+        clearTimeout(searchRenderTimer);
         $("searchInput").value = "";
-        renderSidebarTags();
-        renderFilterPanel();
-        render();
+        updateLibrarySearch("");
+        void render().catch(console.error);
     });
 
     $("selectionToggleBtn").addEventListener("click", () => {
@@ -1922,7 +1879,7 @@ function setupEvents() {
         const ids = [...(deletingClips ? state.selectedClipIds : state.selectedMusicIds)];
         if (!ids.length) return;
         const noun = deletingClips ? "片段" : "音乐";
-        const extra = deletingClips ? "" : "，以及这些音乐下的所有片段";
+        const extra = deletingClips ? "" : "，以及这些音乐下的所有片段和电影使用记录";
         const ok = await confirm(`确定删除选中的 ${ids.length} 个${noun}${extra}吗？此操作无法撤销。`, `批量删除${noun}`);
         if (!ok) return;
         await deleteLibraryEntries(deletingClips ? "clips" : "music", ids, { exitSelection: true });
@@ -2025,7 +1982,6 @@ function setupEvents() {
         state.activeTagIds = [];
         resetPagination();
         await renderSidebarTags();
-        renderFilterPanel();
         render();
     });
 
@@ -2084,7 +2040,6 @@ function setupEvents() {
             try {
                 await invoke("delete_tag_category", { name });
                 await renderSidebarTags();
-                await renderFilterPanel();
                 await render();
                 showToast("维度已删除");
             } catch (error) {
@@ -2135,7 +2090,6 @@ function setupEvents() {
                 invalidateLibraryCache();
                 state.activeTagIds = state.activeTagIds.filter(value => value !== tag.id);
                 await renderSidebarTags();
-                await renderFilterPanel();
                 await render();
                 showToast("Tag 已删除");
             } catch (error) {
@@ -2289,7 +2243,6 @@ function setupEvents() {
             if (targetParentId != null) state.tagGroupCollapsed.delete(`t:${targetParentId}`);
             saveTagGroupCollapsed();
             await renderSidebarTags();
-            await renderFilterPanel();
             if (crossDimension) {
                 const category = (await invoke("list_tag_category_records")).find(item => item.id === targetCategoryId);
                 showToast(`已移动到「${category?.name ?? "目标"}」维度`);
@@ -2313,13 +2266,19 @@ function setupEvents() {
         .addEventListener(
             "click",
             async event => {
+                if (handleCatalogMenuClick(event)) return;
+                if (event.target.closest("[data-back-album-directory]")) {
+                    state.catalogSelection = null;
+                    await render();restoreDirectoryScroll("albums");return;
+                }
+                if (event.target.closest("[data-movie-action]")) return handleMovieAction(event);
                 if (event.target.closest("[data-remove-assigned-tag]")) return handleAssignedTagClick(event);
 
 
                 if (event.target.closest("[data-clear-library-filters]")) {
-                    state.search = ""; state.albumSearch = ""; state.activeTagIds = [];
+                    state.search = ""; state.albumSearch = ""; state.activeTagIds = []; state.movieUsageStatus = "all";
                     $("searchInput").value = ""; resetPagination();
-                    await renderFilterPanel(); await renderSidebarTags(); await render(); return;
+                    await renderSidebarTags(); await render(); return;
                 }
                 const recentMode = event.target.closest("[data-recent-mode]");
                 if (recentMode) {
@@ -2327,16 +2286,6 @@ function setupEvents() {
                     state.pages["music:recent"] = 1;
                     await render(); return;
                 }
-                const clearAlbumFilter = event.target.closest("[data-clear-album-filter]");
-                if (clearAlbumFilter) {
-                    state.albumSearch = "";
-                    state.catalogSelection = null;
-                    state.pages["catalog:album:groups"] = 1;
-                    await render();
-                    document.querySelector("[data-album-filter]")?.focus();
-                    return;
-                }
-
                 if (event.target.closest("[data-quick-tag-input], [data-quick-tag-select], [data-album-tag-input], [data-album-tag-select]")) {
                     event.stopPropagation();
                     return;
@@ -2361,7 +2310,7 @@ function setupEvents() {
                     const listScroll = document.querySelector(".catalog-list")?.scrollTop || 0;
                     state.pages[pageButton.dataset.pageKey] = Number(pageButton.dataset.page);
                     await render();
-                    if (pageButton.dataset.pageKey.startsWith("catalog:")) {
+                    if (pageButton.dataset.pageKey.startsWith("catalog:tag:")) {
                         restoreCatalogScroll({
                             list: pageButton.dataset.pageKey.endsWith(":groups") ? 0 : listScroll,
                             detail: 0
@@ -2581,13 +2530,15 @@ function setupEvents() {
                 if (catalogItem) {
 
                     const listScroll = document.querySelector(".catalog-list")?.scrollTop || 0;
+                    if (state.currentView === "albums") { state.albumDirectoryScroll = document.querySelector(".main-scroll-area")?.scrollTop || 0;state.search = "";closeMusicContextPanels(); }
 
                     state.catalogSelection =
                         catalogItem.dataset.catalogKey;
                     state.pages[`catalog:${state.currentView === "albums" ? "album" : "tag"}:${state.catalogSelection}`] = 1;
 
                     await render();
-                    restoreCatalogScroll({ list: listScroll, detail: 0 });
+                    if (state.currentView === "albums") scrollMainContentToTop();
+                    else restoreCatalogScroll({ list: listScroll, detail: 0 });
 
                     return;
                 }
@@ -2597,7 +2548,7 @@ function setupEvents() {
                     const album = deleteAlbum.dataset.deleteAlbum;
                     const ids = await invoke("library_related_ids", { musicIds: [], album });
                     if (!ids.length) return;
-                    const ok = await confirm(`确定删除专辑「${album}」及其 ${ids.length} 首音乐和全部片段吗？此操作无法撤销。`, "删除专辑");
+                    const ok = await confirm(`确定删除专辑「${album}」及其 ${ids.length} 首音乐、全部片段和电影使用记录吗？此操作无法撤销。`, "删除专辑");
                     if (!ok) return;
                     await deleteLibraryEntries("music", ids, { exitSelection: true });
                     await invoke("delete_album_tags", { album });
@@ -2637,50 +2588,7 @@ function setupEvents() {
             }
         );
 
-    $("contentArea").addEventListener("compositionstart", event => {
-        if (event.target.closest("[data-album-filter]")) albumFilterComposing = true;
-    });
-
-    $("contentArea").addEventListener("compositionend", event => {
-        const input = event.target.closest("[data-album-filter]");
-        if (!input) return;
-        albumFilterComposing = false;
-        scheduleAlbumFilter(input);
-    });
-
-    const scheduleAlbumFilter = input => {
-        state.albumSearch = input.value;
-        state.catalogSelection = null;
-        state.pages["catalog:album:groups"] = 1;
-        clearTimeout(albumFilterTimer);
-        albumFilterTimer = setTimeout(async () => {
-            await render();
-            const nextInput = document.querySelector("[data-album-filter]");
-            if (nextInput) {
-                nextInput.focus();
-                nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
-            }
-        }, 140);
-    };
-
-    $("contentArea").addEventListener("input", event => {
-        const input = event.target.closest("[data-album-filter]");
-        if (!input || albumFilterComposing || event.isComposing) return;
-        scheduleAlbumFilter(input);
-    });
-
     $("contentArea").addEventListener("keydown", async event => {
-        const albumInput = event.target.closest("[data-album-filter]");
-        if (albumInput && event.key === "Escape") {
-            event.preventDefault();
-            clearTimeout(albumFilterTimer);
-            state.albumSearch = "";
-            state.catalogSelection = null;
-            state.pages["catalog:album:groups"] = 1;
-            await render();
-            document.querySelector("[data-album-filter]")?.focus();
-            return;
-        }
         const input = event.target.closest("[data-quick-tag-input]");
         if (input) {
 
@@ -2987,6 +2895,10 @@ function setupEvents() {
     document.addEventListener("keydown", event => {
         const isTyping = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "");
         if (!$("updateModal").classList.contains("hidden")) return;
+        if (!$("movieUsageModal").classList.contains("hidden")) {
+            if (event.key === "Escape") { event.preventDefault();closeMovieDialog(); }
+            return;
+        }
         const editorOpen = !clipEditorPanel.classList.contains("hidden");
         if (editorOpen && !isTyping) {
             if (event.key === " ") {
@@ -3117,14 +3029,14 @@ function setupEvents() {
                     return;
                 }
 
-                if (state.search || state.activeTagIds.length) {
-                    state.search = "";
+                if ($("searchInput").value || state.activeTagIds.length) {
+                    const hadTagFilters = state.activeTagIds.length > 0;
+                    updateLibrarySearch("");
                     state.activeTagIds = [];
                     clearTimeout(searchRenderTimer);
-                    resetPagination();
+                    if (hadTagFilters) resetPagination();
                     $("searchInput").value = "";
                     renderSidebarTags();
-                    renderFilterPanel();
                     render();
                     return;
                 }
@@ -3156,13 +3068,15 @@ function setupEvents() {
         .addEventListener(
             "click",
             async event => {
+                if (event.target.closest("[data-movie-action]")) return handleMovieAction(event);
                 if (event.target.closest("[data-remove-assigned-tag]")) return handleAssignedTagClick(event);
 
 
                 const pageButton = event.target.closest("[data-page-key]");
                 if (pageButton && state.selectedMusic) {
                     state.pages[pageButton.dataset.pageKey] = Number(pageButton.dataset.page);
-                    await openDetail(state.selectedMusic.id); return;
+                    if (pageButton.dataset.pageKey.startsWith("movie-usages:")) await renderMusicMovieUsages();
+                    else await openDetail(state.selectedMusic.id); return;
                 }
                 const clipAction =
                     event.target.closest(
@@ -3205,6 +3119,7 @@ function setupEvents() {
         .addEventListener(
             "click",
             async event => {
+                if (event.target.closest("[data-movie-action]")) return handleMovieAction(event);
                 if (event.target.closest("[data-remove-assigned-tag]")) return handleAssignedTagClick(event);
 
 
@@ -3352,7 +3267,6 @@ async function init() {
         setupEvents();
         setupSpatialMotion();
 
-        renderFilterPanel();
         renderSelectionToolbar();
 
         await updateCounts();

@@ -126,6 +126,7 @@ const libraryQueryWrites = new Set([
     "create_music", "update_music", "delete_music", "delete_music_batch", "mark_music_played",
     "create_clip", "update_clip", "delete_clip", "delete_clip_batch",
     "create_tag", "update_tag", "move_tag", "delete_tag", "create_tag_category", "update_tag_category", "delete_tag_category",
+    "add_music_movie_usages", "add_movie_music_usages", "create_movie", "delete_movie", "update_movie", "update_movie_usage", "delete_movie_usage",
     "set_album_tags", "delete_album_tags", "create_candidate", "delete_candidate", "clear_candidates"
 ]);
 function invalidateLibraryQueries(command, result) {
@@ -134,7 +135,7 @@ function invalidateLibraryQueries(command, result) {
 let libraryRenderVersion = 0;
 const libraryPageRequests = new Map();
 function libraryFilters() {
-    return { search: state.search, activeTagIds: [...state.activeTagIds] };
+    return { search: state.search, activeTagIds: [...state.activeTagIds], movieUsageStatus: state.movieUsageStatus };
 }
 async function requestLibraryPage(query, key, defaultSize = PAGE_SIZE) {
     const request = { ...query, page: state.pages[key] || 1, pageSize: Number(state.pageSizes[key]) || defaultSize };

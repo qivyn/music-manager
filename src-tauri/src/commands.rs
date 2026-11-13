@@ -69,6 +69,8 @@ macro_rules! lock_db {
 pub mod library_query;
 #[path = "library_import.rs"]
 pub mod library_import;
+#[path = "movies.rs"]
+pub mod movies;
 
 fn mime_from_ext(path: &str) -> String {
     let ext = Path::new(path)

@@ -23,6 +23,11 @@ pub struct LibraryQuery {
     pub tag_id: Option<i64>,
     pub direct_tag: bool,
     pub music_id: Option<String>,
+    pub movie_id: Option<i64>,
+    pub exclude_movie_id: Option<i64>,
+    pub exclude_music_id: Option<String>,
+    pub anchor_movie_id: Option<i64>,
+    pub movie_usage_status: String,
     pub page: u64,
     pub page_size: u64,
 }
@@ -64,6 +69,9 @@ fn bind(values: &mut Vec<Value>, value: impl Into<Value>) -> String {
 }
 
 fn query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
+    if matches!(query.kind.as_str(), "movies" | "music_movie_usages") {
+        return movie_query_sql(query);
+    }
     let mut values = Vec::new();
     let mut predicates = Vec::new();
     let is_clip = query.kind == "clips";
@@ -85,14 +93,24 @@ fn query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
         let music_text = "m.name||' '||m.file_name||' '||m.album||' '||m.artist||' '||m.genre||' '||m.year||' '||m.path||' '||
             COALESCE((SELECT group_concat(name,' ') FROM (SELECT t.name FROM music_tags mt JOIN tags t ON t.id=mt.tag_id WHERE mt.music_id=m.id ORDER BY t.name COLLATE NOCASE,t.id)),'')";
         let clip_text = "cl.name||' '||COALESCE((SELECT group_concat(name,' ') FROM (SELECT t.name FROM clip_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.clip_id=cl.id ORDER BY t.name COLLATE NOCASE,t.id)),'')";
+        let movie_needle = bind(
+            &mut values,
+            query
+                .search
+                .trim()
+                .nfkc()
+                .flat_map(char::to_lowercase)
+                .collect::<String>(),
+        );
+        let movie_match = format!("EXISTS(SELECT 1 FROM music_movie_usages u JOIN movies f ON f.id=u.movie_id WHERE u.music_id=m.id AND instr(f.name_key,{movie_needle})>0)");
         if is_clip && !query.direct_tag {
             let text = clip_text.replace("cl.", "c.");
             predicates.push(format!(
-                "instr(mm_lower({music_text}||' '||{text}),{needle})>0"
+                "(instr(mm_lower({music_text}||' '||{text}),{needle})>0 OR {movie_match})"
             ));
         } else {
             predicates.push(format!("(instr(mm_lower({music_text}),{needle})>0 OR EXISTS (
-                SELECT 1 FROM clips cl WHERE cl.music_id=m.id AND instr(mm_lower({clip_text}),{needle})>0))"));
+                SELECT 1 FROM clips cl WHERE cl.music_id=m.id AND instr(mm_lower({clip_text}),{needle})>0) OR {movie_match})"));
         }
     }
     if let Some(album) = &query.album {
@@ -115,6 +133,29 @@ fn query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
         let id = bind(&mut values, id.clone());
         predicates.push(format!("m.id={id}"));
     }
+    let movie_scope = query.movie_id.map(|id| bind(&mut values, id));
+    if query.kind != "music" {
+        if let Some(id) = &movie_scope {
+            predicates.push(format!(
+                "EXISTS(SELECT 1 FROM music_movie_usages WHERE music_id=m.id AND movie_id={id})"
+            ));
+        }
+    }
+    if let Some(id) = query.exclude_movie_id {
+        let id = bind(&mut values, id);
+        predicates.push(format!(
+            "NOT EXISTS(SELECT 1 FROM music_movie_usages WHERE music_id=m.id AND movie_id={id})"
+        ));
+    }
+    match query.movie_usage_status.as_str() {
+        "" | "all" => {}
+        "recorded" => {
+            predicates.push("EXISTS(SELECT 1 FROM music_movie_usages WHERE music_id=m.id)".into())
+        }
+        "unrecorded" => predicates
+            .push("NOT EXISTS(SELECT 1 FROM music_movie_usages WHERE music_id=m.id)".into()),
+        _ => return Err("无效的电影使用筛选条件".into()),
+    }
     let source = match query.recent.as_deref() {
         Some("used") => "SELECT * FROM music WHERE last_played_at IS NOT NULL ORDER BY last_played_at DESC,id ASC LIMIT 100",
         Some("added") => "SELECT * FROM music ORDER BY created_at DESC,id ASC LIMIT 100",
@@ -126,10 +167,13 @@ fn query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
         source_music AS ({source})");
     let where_sql = predicates.join(" AND ");
     let (rows, order) = match query.kind.as_str() {
-        "music" => (format!("SELECT m.id,m.created_at,m.last_played_at FROM source_music m WHERE {where_sql}"),
-            if query.recent.as_deref() == Some("used") { "last_played_at DESC,id ASC" }
-            else if query.newest || query.recent.is_some() { "created_at DESC,id ASC" }
-            else { "created_at ASC,id ASC" }),
+        "music" => match &movie_scope {
+            Some(id) => (format!("SELECT m.id,m.created_at,m.last_played_at,u.created_at AS usage_created_at,u.id AS usage_id FROM source_music m JOIN music_movie_usages u ON u.music_id=m.id AND u.movie_id={id} WHERE {where_sql}"), "usage_created_at DESC,usage_id DESC"),
+            None => (format!("SELECT m.id,m.created_at,m.last_played_at FROM source_music m WHERE {where_sql}"),
+                if query.recent.as_deref() == Some("used") { "last_played_at DESC,id ASC" }
+                else if query.newest || query.recent.is_some() { "created_at DESC,id ASC" }
+                else { "created_at ASC,id ASC" }),
+        },
         "clips" => (format!("SELECT c.id,m.name AS music_name,c.start FROM clips c JOIN source_music m ON m.id=c.music_id WHERE {where_sql}"), "music_name COLLATE NOCASE,start ASC,id ASC"),
         "albums" => {
             let needle = bind(&mut values, query.album_search.clone());
@@ -151,6 +195,101 @@ fn query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
         order: order.into(),
         values,
     })
+}
+
+fn movie_query_sql(query: &LibraryQuery) -> Result<QuerySql, String> {
+    let mut values = Vec::new();
+    let mut predicates = vec!["1=1".to_string()];
+    let (rows, order) = if query.kind == "movies" {
+        if !query.search.trim().is_empty() {
+            let needle = bind(
+                &mut values,
+                query
+                    .search
+                    .trim()
+                    .nfkc()
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>(),
+            );
+            predicates.push(format!("instr(f.name_key,{needle})>0"));
+        }
+        if let Some(music_id) = &query.exclude_music_id {
+            let id = bind(&mut values, music_id.clone());
+            predicates.push(format!("NOT EXISTS(SELECT 1 FROM music_movie_usages WHERE movie_id=f.id AND music_id={id})"));
+        }
+        (format!("SELECT CAST(f.id AS TEXT) AS id,f.id AS movie_id,f.name AS label,(SELECT COUNT(*) FROM music_movie_usages WHERE movie_id=f.id) AS count FROM movies f WHERE {}", predicates.join(" AND ")), "label COLLATE NOCASE,movie_id ASC")
+    } else {
+        let music_id = query.music_id.as_ref().ok_or("缺少音乐 ID")?;
+        let id = bind(&mut values, music_id.clone());
+        predicates.push(format!("u.music_id={id}"));
+        if !query.search.trim().is_empty() {
+            let needle = bind(&mut values, query.search.trim().to_lowercase());
+            predicates.push(format!("instr(mm_lower(f.name||' '||u.note),{needle})>0"));
+        }
+        (format!("SELECT CAST(u.id AS TEXT) AS id,u.id AS usage_id,u.created_at FROM music_movie_usages u JOIN movies f ON f.id=u.movie_id WHERE {}", predicates.join(" AND ")), "created_at DESC,usage_id DESC")
+    };
+    Ok(QuerySql {
+        cte: format!("WITH rows AS ({rows})"),
+        order: order.into(),
+        values,
+    })
+}
+
+fn movie_summaries(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<HashMap<String, (i64, Vec<Json>)>, String> {
+    let mut stmt = conn.prepare("WITH ranked AS (
+        SELECT u.music_id,f.id,f.name,u.id AS usage_id,COUNT(*) OVER(PARTITION BY u.music_id) AS total,
+            ROW_NUMBER() OVER(PARTITION BY u.music_id ORDER BY u.created_at DESC,u.id DESC) AS position
+        FROM music_movie_usages u JOIN movies f ON f.id=u.movie_id
+        WHERE u.music_id IN (SELECT value FROM json_each(?1)))
+        SELECT music_id,id,name,total,usage_id FROM ranked WHERE position<=2 ORDER BY music_id,position").map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([json!(ids).to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut result: HashMap<String, (i64, Vec<Json>)> = HashMap::new();
+    for row in rows {
+        let (id, movie_id, name, total, usage_id) = row.map_err(|e| e.to_string())?;
+        let entry = result.entry(id).or_insert_with(|| (total, Vec::new()));
+        entry.1.push(json!({"id":movie_id,"name":name,"usageId":usage_id}));
+    }
+    Ok(result)
+}
+
+fn usages_by_ids(conn: &Connection, ids: &[String]) -> Result<HashMap<String, Json>, String> {
+    let mut stmt = conn.prepare("SELECT u.id,u.music_id,u.movie_id,f.name,u.note,u.created_at,u.updated_at
+        FROM music_movie_usages u JOIN movies f ON f.id=u.movie_id WHERE u.id IN (SELECT value FROM json_each(?1))").map_err(|e| e.to_string())?;
+    let rows=stmt.query_map([json!(ids).to_string()],|r|{
+        let id=r.get::<_,i64>(0)?;
+        Ok((id.to_string(),json!({"id":id,"musicId":r.get::<_,String>(1)?,"movieId":r.get::<_,i64>(2)?,"movieName":r.get::<_,String>(3)?,"note":r.get::<_,String>(4)?,"createdAt":r.get::<_,i64>(5)?,"updatedAt":r.get::<_,i64>(6)?})))
+    }).map_err(|e|e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn music_usage_notes(
+    conn: &Connection,
+    movie_id: i64,
+    ids: &[String],
+) -> Result<HashMap<String, (i64, String)>, String> {
+    let mut stmt=conn.prepare("SELECT music_id,id,note FROM music_movie_usages WHERE movie_id=?1 AND music_id IN (SELECT value FROM json_each(?2))").map_err(|e|e.to_string())?;
+    let rows = stmt
+        .query_map(params![movie_id, json!(ids).to_string()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                (r.get::<_, i64>(1)?, r.get::<_, String>(2)?),
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
 fn tags_for(
@@ -186,6 +325,7 @@ fn tags_for(
 
 fn music_by_ids(conn: &Connection, ids: &[String]) -> Result<HashMap<String, Json>, String> {
     let mut tags = tags_for(conn, ids, "music_tags", "music_id")?;
+    let mut movies = movie_summaries(conn, ids)?;
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {MUSIC_COLUMNS},(SELECT COUNT(*) FROM clips WHERE music_id=m.id) AS clip_count
@@ -206,6 +346,9 @@ fn music_by_ids(conn: &Connection, ids: &[String]) -> Result<HashMap<String, Jso
         let id = item.id.clone();
         let mut value = json!(item);
         value["clipCount"] = json!(count);
+        let (movie_count, preview) = movies.remove(&id).unwrap_or_default();
+        value["movieCount"] = json!(movie_count);
+        value["moviePreview"] = json!(preview);
         result.insert(id, value);
     }
     Ok(result)
@@ -251,11 +394,21 @@ pub(super) fn query_page_in(
         query.page_size.clamp(1, 100)
     };
     let total_pages = total.div_ceil(page_size).max(1);
-    let page = query.page.max(1).min(total_pages);
+    let mut page = query.page.max(1).min(total_pages);
+    if query.kind == "movies" {
+        if let Some(anchor) = query.anchor_movie_id {
+            let mut values = sql.values.clone();
+            let anchor = bind(&mut values, anchor);
+            let rank: Option<u64> = tx.query_row(&format!("{},ranked AS (SELECT movie_id,ROW_NUMBER() OVER(ORDER BY {}) AS position FROM rows) SELECT position FROM ranked WHERE movie_id={anchor}",sql.cte,sql.order),params_from_iter(values.iter()),|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+            if let Some(rank) = rank {
+                page = (rank - 1) / page_size + 1;
+            }
+        }
+    }
     let limit = bind(&mut sql.values, page_size as i64);
     let offset = bind(&mut sql.values, ((page - 1) * page_size) as i64);
     let select = match query.kind.as_str() {
-        "albums" | "tags" => "id,label,count",
+        "albums" | "tags" | "movies" => "id,label,count",
         "candidates" => "id,kind",
         _ => "id",
     };
@@ -280,18 +433,22 @@ pub(super) fn query_page_in(
     };
     let ids: Vec<_> = rows.iter().map(|r| r.0.clone()).collect();
     let items = match query.kind.as_str() {
+        "movies" => rows.into_iter().map(|(id,name,count)| Ok(json!({"id":id.parse::<i64>().map_err(|e|e.to_string())?,"name":name,"musicCount":count}))).collect::<Result<Vec<_>,String>>()?,
+        "music_movie_usages" => { let mut usages=usages_by_ids(&tx,&ids)?;ids.iter().filter_map(|id|usages.remove(id)).collect() },
         "albums" | "tags" => rows
             .into_iter()
             .map(|(key, label, count)| json!({"key":key,"label":label,"count":count}))
             .collect(),
         "music" => {
             let mut music = music_by_ids(&tx, &ids)?;
+            let mut notes = match query.movie_id { Some(id) => music_usage_notes(&tx,id,&ids)?, None => HashMap::new() };
             ids.iter()
                 .enumerate()
                 .filter_map(|(index, id)| {
                     music.remove(id).map(|mut item| {
                         item["libraryPosition"] = json!((page - 1) * page_size + index as u64);
                         item["libraryTotal"] = json!(total);
+                        if let Some((usage_id,note)) = notes.remove(id) { item["movieUsageId"]=json!(usage_id);item["movieUsageNote"]=json!(note); }
                         item
                     })
                 })

@@ -81,7 +81,7 @@ async function removeAssignedTag(kind, ownerId, tagId) {
             }
         }
         try {
-            await refreshWhileInteractive(renderSidebarTags, renderFilterPanel, renderPreservingScroll,
+            await refreshWhileInteractive(renderSidebarTags, renderPreservingScroll,
                 () => $("candidatePanel").classList.contains("hidden") ? null : renderCandidatePanel(),
                 () => kind === "music" && contextRequest === musicContextRequest && state.selectedMusic?.id === ownerId
                     ? renderDetailTagSuggestions() : null,
