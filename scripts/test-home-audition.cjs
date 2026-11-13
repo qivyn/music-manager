@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const appSource = require('./app-source.cjs').readAppSource();
+const catalogControlsSource = fs.readFileSync(path.join(__dirname, "../frontend/catalog-controls.js"), "utf8");
 const turntableSource = fs.readFileSync(path.join(__dirname, "../frontend/turntable.js"), "utf8");
 const section = (source, start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const auditionSource = [
@@ -65,6 +66,8 @@ function audition({ onInvoke = () => {}, failPlay = false } = {}) {
     };
     context.requestLibraryPage = query => context.invoke("query_library_page", { query });
     vm.createContext(context);
+    // Workspace rendering closes any catalog menu before refreshing playback.
+    vm.runInContext(catalogControlsSource, context);
     vm.runInContext(auditionSource, context);
     context.tracks = tracks;
     vm.runInContext("homeTracks = tracks.slice();", context);
