@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>声场档案</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="movie-usage.css">
     <link rel="stylesheet" href="themes.css">
     <link rel="stylesheet" href="home-scene.css">
 </head>
@@ -53,9 +54,8 @@
                 <span>专辑</span>
             </button>
 
-            <button class="nav-item" data-view="recent">
-                <span>最近</span>
-            </button>
+            <button class="nav-item" data-view="movies"><span>电影</span></button>
+
         </nav>
 
         <div class="top-actions">
@@ -101,10 +101,11 @@
         <aside class="sidebar">
 
             <div class="sidebar-controls">
-                <button id="sidebarCollapseBtn" class="sidebar-collapse-btn" type="button" aria-expanded="true" title="收起导航">
+                <button id="sidebarCollapseBtn" class="sidebar-collapse-btn" type="button" aria-expanded="true" title="收起 Tag 筛选">
                     <span aria-hidden="true">‹</span>
-                    <span>收起导航</span>
+                    <span>收起 Tag 筛选</span>
                 </button>
+                <span id="sidebarFilterCount" class="sidebar-filter-count hidden" aria-hidden="true"></span>
             </div>
 
             <div class="sidebar-section tag-section">
@@ -150,9 +151,14 @@
                     </button>
                 </div>
 
-                <button id="filterToggleBtn" class="secondary-btn toolbar-btn" aria-expanded="false">
-                    ⌘ 筛选 <span id="filterActiveIndicator" class="filter-active-indicator hidden" aria-hidden="true"></span>
-                </button>
+                <div id="movieUsageControl" class="movie-usage-control">
+                    <button id="movieUsageFilter" type="button" class="secondary-btn toolbar-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="movieUsageMenu"><span id="movieUsageLabel">使用记录：全部</span><span class="theme-toggle-chevron" aria-hidden="true">⌄</span></button>
+                    <div id="movieUsageMenu" class="theme-menu movie-usage-menu hidden" role="menu" aria-label="电影使用状态">
+                        <button type="button" class="settings-action" role="menuitemradio" aria-checked="true" tabindex="-1" data-movie-usage-status="all">全部<span aria-hidden="true">✓</span></button>
+                        <button type="button" class="settings-action" role="menuitemradio" aria-checked="false" tabindex="-1" data-movie-usage-status="recorded">有使用记录<span aria-hidden="true">✓</span></button>
+                        <button type="button" class="settings-action" role="menuitemradio" aria-checked="false" tabindex="-1" data-movie-usage-status="unrecorded">未记录使用<span aria-hidden="true">✓</span></button>
+                    </div>
+                </div>
 
                 <button id="selectionToggleBtn" class="secondary-btn toolbar-btn">
                     选择
@@ -162,22 +168,11 @@
                     点击试听：开
                 </button>
 
+                <button id="catalogMovieActionBtn" class="primary-btn catalog-toolbar-action hidden" type="button">＋ 新建电影</button>
+
             </div>
 
             <div class="main-scroll-area">
-            <section id="filterPanel" class="filter-panel hidden" aria-label="标签筛选">
-                <div class="filter-panel-header">
-                    <div>
-                        <strong>当前筛选</strong>
-                        <span id="filterEmptyHint">还没选中任何 Tag，在左侧点 Tag 即可筛选</span>
-                    </div>
-                    <div>
-                        <button id="clearFiltersBtn" class="text-btn">清空筛选</button>
-                    </div>
-                </div>
-                <div id="activeFilterTags" class="active-filter-tags"></div>
-            </section>
-
             <section id="bulkToolbar" class="bulk-toolbar hidden">
                 <span id="selectionCount">已选择 0 首</span>
                 <button id="selectAllVisibleBtn" class="text-btn">全选本页</button>
@@ -487,11 +482,17 @@
 
         </div>
 
+        <div id="importProgress" class="import-progress hidden" role="status" aria-live="polite">
+            <progress id="importProgressMeter" max="1"></progress>
+            <span id="importProgressText"></span>
+        </div>
+
         <div class="modal-footer">
             <button class="secondary-btn" data-close-modal>
                 取消
             </button>
 
+            <button id="cancelImportTaskBtn" class="secondary-btn hidden" type="button">停止导入</button>
             <button
                 id="confirmImportBtn"
                 class="primary-btn"
@@ -688,6 +689,15 @@
 </div>
 
 
+<div id="movieUsageModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="movieDialogTitle">
+    <div class="modal-box movie-dialog">
+        <div class="modal-header"><h2 id="movieDialogTitle">记录电影使用</h2><button type="button" class="icon-btn" data-close-movie-dialog aria-label="关闭电影使用窗口">×</button></div>
+        <div id="movieDialogBody" class="modal-body movie-dialog-body"></div>
+        <div id="movieDialogError" class="movie-dialog-error" role="alert"></div>
+        <div class="modal-footer"><button type="button" class="secondary-btn" data-close-movie-dialog>取消</button><button type="button" id="movieDialogSave" class="primary-btn">保存</button></div>
+    </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" class="toast"></div>
 
@@ -697,7 +707,20 @@
 <script src="home-scene-motion.js"></script>
 <script src="home-scene.js"></script>
 <script src="theme-transition.js"></script>
+<script src=".preview/library-query.js"></script>
+<script src=".preview/movie-store.js"></script>
 <script src=".preview/mock-tauri.js"></script>
+<script src="library-data.js"></script>
+<script src="assigned-tags.js"></script>
+<script src="movie-usage.js"></script>
+<script src="home-player.js"></script>
+<script src="catalog-controls.js"></script>
+<script src="library-browser.js"></script>
+<script src="music-detail.js"></script>
+<script src="player.js"></script>
+<script src="candidates.js"></script>
+<script src="library-import.js"></script>
+<script src="clip-editor.js"></script>
 <script src="app.js"></script>
 <script src="updater.js"></script>
 

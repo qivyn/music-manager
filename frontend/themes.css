@@ -23,6 +23,10 @@ body[data-theme="cream"] {
     --ring: #96677526;
     --tag: #e9dfe9;
     --tag-text: #705b76;
+    --movie-chip-bg: #ffffff;
+    --movie-chip-border: #d7dce3;
+    --movie-chip-text: #3d424c;
+    --movie-chip-hover: #f3f5f8;
     --danger: #9d484e;
     --danger-soft: #f3e1df;
     --warning: #82612f;
@@ -67,6 +71,10 @@ body[data-theme="night"] {
     --ring: #efcfb61f;
     --tag: #635d7b;
     --tag-text: #f4e4ee;
+    --movie-chip-bg: #ffffff;
+    --movie-chip-border: #d7dce3;
+    --movie-chip-text: #3d424c;
+    --movie-chip-hover: #f3f5f8;
     --danger: #ffd1d5;
     --danger-soft: #72545e;
     --warning: #f5e0bb;
@@ -227,6 +235,8 @@ body:is([data-theme="cream"], [data-theme="night"]) .album-source-control label:
 body:is([data-theme="cream"], [data-theme="night"]) .album-source-control input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--primary-light) !important; }
 body:is([data-theme="cream"], [data-theme="night"]) .settings-action { color: var(--text); }
 body:is([data-theme="cream"], [data-theme="night"]) .settings-action:hover { background: var(--hover); }
+body:is([data-theme="cream"], [data-theme="night"]) .settings-action.danger-btn { color: var(--danger); }
+body:is([data-theme="cream"], [data-theme="night"]) .settings-action.danger-btn:hover { background: var(--danger-soft); }
 body:is([data-theme="cream"], [data-theme="night"]) .timeline-track { background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 12px), var(--surface); border-radius: var(--r-sm); }
 body:is([data-theme="cream"], [data-theme="night"]) .timeline-selection { background: var(--ring); border-color: var(--primary); }
 body:is([data-theme="cream"], [data-theme="night"]) :is(.timeline-handle, .timeline-playhead) { background: var(--primary); box-shadow: none; }
