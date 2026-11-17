@@ -89,7 +89,7 @@ function harness(theme = "night") {
         }
     });
     vm.runInNewContext(source, {
-        window, console,
+        window, console, AbortController,
         document: { body, getElementById: id => ({ barAudio: audio, playerWave: player, contentArea: area }[id]),
             querySelectorAll: () => [row, clip] },
         MutationObserver: class {

@@ -3278,13 +3278,6 @@ body.has-player .toast {
         height: 30px;
     }
 
-    /* 操作区换行后行变高，Tag 收成一行避免整行继续被撑高。 */
-    .main-scroll-area .music-tags {
-        max-height: 22px;
-        flex-wrap: nowrap;
-        overflow: hidden;
-    }
-
     .main-scroll-area .music-tags .tag,
     .main-scroll-area .music-tags .quick-tag-button {
         flex: 0 0 auto;
@@ -5608,7 +5601,7 @@ body::before {
     min-height: 88px;
     padding: 13px 16px 13px 58px;
     border-bottom: 1px solid var(--border);
-    transition: background .16s ease, padding-left .16s ease;
+    transition: none;
 }
 .music-row::before {
     content: counter(track, decimal-leading-zero);
@@ -5620,7 +5613,6 @@ body::before {
     letter-spacing: .08em;
 }
 .music-row:hover {
-    padding-left: 62px;
     color: var(--text);
     background: #fffaf0;
 }
@@ -5684,6 +5676,7 @@ body::before {
 }
 
 .music-actions { gap: 5px; opacity: .52; transition: opacity .15s; }
+.music-row .music-actions { transition: none; }
 .music-row:hover .music-actions,
 .music-card:hover .music-actions { opacity: 1; }
 .icon-action,
@@ -5992,7 +5985,6 @@ body::before {
     .content-area { padding: 16px 14px 30px; }
     .music-row { padding-left: 47px; }
     .music-row::before { left: 11px; }
-    .music-row:hover { padding-left: 49px; }
     .music-actions { max-width: 76px; }
     .search-key { display: none; }
 }
@@ -6213,14 +6205,6 @@ body[data-theme="sky"] .suggestion-tag,
 body[data-theme="sky"] .tag-result-tab,
 body[data-theme="sky"] .tag-page-item,
 body[data-theme="sky"] .tag-drop-zone { color: var(--tag-text); background: var(--tag); border-color: rgba(95,174,195,.24); border-radius: 99px; }
-
-/* 筛选面板的 Tag 需要比列表内的 Tag 更易扫读。 */
-#filterPanel .active-filter-tag {
-    font-size: 13px;
-    padding: 5px 10px;
-    min-height: 0;
-    line-height: 1.25;
-}
 
 body[data-theme="sky"] .music-actions { opacity: 1; }
 body[data-theme="sky"] .icon-action,
@@ -6763,7 +6747,7 @@ body.sidebar-collapsed .sidebar-controls {
 
 body.sidebar-collapsed .sidebar-collapse-btn > span:last-child,
 body.sidebar-collapsed .sidebar-title,
-body.sidebar-collapsed .nav-item > span:not(:first-child),
+body.sidebar-collapsed .sidebar .nav-item > span:not(:first-child),
 body.sidebar-collapsed .empty-small {
     display: none;
 }
@@ -6777,18 +6761,91 @@ body.sidebar-collapsed .sidebar-collapse-btn > span:first-child {
     transform: rotate(180deg);
 }
 
-body.sidebar-collapsed .nav-item {
+body.sidebar-collapsed .sidebar .nav-item {
     justify-content: center;
     padding-right: 0;
     padding-left: 0;
 }
 
-body.sidebar-collapsed .nav-item.active::before {
+body.sidebar-collapsed .sidebar .nav-item.active::before {
     left: -10px;
 }
 
 body.sidebar-collapsed .topbar::after {
     left: 68px;
+}
+
+.sidebar-controls { position: relative; }
+.sidebar-filter-count {
+    position: absolute;
+    top: -7px;
+    right: 0;
+    min-width: 18px;
+    padding: 2px 4px;
+    border-radius: 99px;
+    background: var(--primary);
+    color: var(--bg);
+    font-size: 10px;
+    text-align: center;
+    pointer-events: none;
+}
+/* Compact album/movie directories share one name/count/action alignment. */
+.catalog-directory { --catalog-action-width: 80px; }
+.catalog-directory-columns { display: grid; grid-template-columns: minmax(0,1fr) 76px var(--catalog-action-width); align-items: center; gap: 10px; padding: 0 10px 10px; border-bottom: 1px solid var(--border); color: var(--subtext); font-size: 11px; }
+.catalog-directory-columns > span:nth-child(2) { text-align: right; }
+.catalog-directory-list { background: transparent; }
+.catalog-directory-row { display: grid; grid-template-columns: minmax(0,1fr) var(--catalog-action-width); align-items: center; gap: 10px; min-height: 52px; padding-right: 10px; border-bottom: 1px solid var(--border); }
+.catalog-directory-row:hover, .catalog-directory-row:focus-within { background: var(--hover); }
+.catalog-directory-open { display: grid; grid-template-columns: 28px minmax(0,1fr) 76px; align-items: center; gap: 12px; min-width: 0; min-height: 51px; padding: 8px 0 8px 10px; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.catalog-directory-open:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.catalog-directory-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-directory-count { text-align: right; color: var(--subtext); font-size: 12px; font-variant-numeric: tabular-nums; }
+.catalog-directory-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; color: var(--primary); background: var(--primary-light); font-size: 16px; }
+.movie-directory { --catalog-action-width: 96px; }
+.catalog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex: 0 0 auto; }
+.row-text-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 32px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--subtext); font: 400 12px/1.4 var(--font-ui); white-space: nowrap; cursor: pointer; }
+.row-text-action:hover { color: var(--primary-strong); background: var(--primary-light); }
+.row-text-action.danger-btn { color: var(--danger); }
+.row-text-action.danger-btn:hover { color: var(--danger); background: var(--danger-soft); }
+.row-text-action:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.catalog-breadcrumb { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-width: 0; }
+.catalog-breadcrumb .catalog-back { flex-shrink: 0; padding: 5px 0; }
+.catalog-breadcrumb-separator { color: var(--subtext); }
+.catalog-current-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.catalog-record-page > .catalog-detail-tags { margin-bottom: 18px; }
+.catalog-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--subtext); font-size: 12px; }
+.catalog-footer > span { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.catalog-footer .pagination { margin: 0 0 0 auto; padding: 0; }
+.catalog-footer .pagination-size { order: -1; }
+.catalog-toolbar-action { margin-left: auto; }
+body.catalog-directory-view .toolbar .search-box { flex: 1 1 320px; min-width: 210px; max-width: 560px; }
+@media (pointer: coarse) {
+    .catalog-actions .row-text-action { min-height: 44px; }
+}
+
+/* Keep quick additions quiet without removing keyboard or touch access. */
+@media (hover: hover) and (pointer: fine) {
+    :is(.music-row, .music-card) .music-quick-actions,
+    .catalog-detail-tags > .quick-tag-button { opacity: 0; pointer-events: none; }
+    :is(.music-row, .music-card):is(:hover, :focus-within) .music-quick-actions,
+    .catalog-detail-tags:is(:hover, :focus-within) > .quick-tag-button {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+.music-quick-actions { display: inline-flex; align-items: center; gap: 8px; }
+.music-quick-actions .movie-record-button {
+    margin: 0;
+    height: 22px;
+    padding: 0 8px;
+    font: 700 10px/1 var(--font-ui);
+    border: 1px dashed var(--border-strong);
+    border-radius: 3px;
+    color: var(--subtext);
+}
+.music-quick-actions .movie-record-button:is(:hover, :focus-visible) {
+    color: var(--primary-strong);
+    border-color: var(--primary);
 }
 
 /* 导航与 Tag 都使用同一枚椭圆数量徽标。 */
@@ -6871,12 +6928,6 @@ body.sidebar-collapsed .topbar::after {
         height: 30px;
     }
 
-    .main:has(.music-clips-panel:not(.hidden)) .music-tags {
-        max-height: 22px;
-        flex-wrap: nowrap;
-        overflow: hidden;
-    }
-
     .main:has(.music-clips-panel:not(.hidden)) .music-tags .tag {
         flex: 0 0 auto;
     }
@@ -6945,24 +6996,6 @@ body.sidebar-collapsed .topbar::after {
 
 .catalog-music-grid {
     min-width: 0;
-}
-
-/* 收起筛选面板后，仍以醒目标记提示当前有 Tag 条件生效。 */
-.filter-active-indicator {
-    width: 8px;
-    height: 8px;
-    flex: 0 0 8px;
-    border-radius: 50%;
-    background: var(--primary);
-    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--primary);
-}
-
-.filter-active-indicator.hidden {
-    display: none;
-}
-
-#filterToggleBtn.has-active-filters {
-    border-color: var(--primary);
 }
 
 /* 图标操作统一显示即时提示，避免只靠图形猜测用途。 */
@@ -7218,7 +7251,6 @@ html:not(.no-soundfield) .spatial-orb { display: none; }
 
 .content { perspective: 1100px; }
 
-.music-row,
 .music-card,
 .album-card,
 .clip-library-row {
@@ -7236,7 +7268,6 @@ html:not(.no-soundfield) .spatial-orb { display: none; }
         background-color .22s ease;
 }
 
-.music-row.is-pointer-lit,
 .music-card.is-pointer-lit,
 .album-card.is-pointer-lit,
 .clip-library-row.is-pointer-lit {
@@ -7246,7 +7277,6 @@ html:not(.no-soundfield) .spatial-orb { display: none; }
     background-image: radial-gradient(circle at var(--glow-x) var(--glow-y), rgba(255,255,255,.2), transparent 39%);
 }
 
-.music-row > *,
 .music-card > *,
 .album-card > *,
 .clip-library-row > * {
@@ -7272,29 +7302,10 @@ html:not(.no-soundfield) .spatial-orb { display: none; }
     pointer-events: none;
 }
 
-.music-row:hover .music-icon {
-    animation: vinyl-turn 7s linear infinite;
-}
-
 .music-list {
     position: relative;
 }
 
-.music-list::after {
-    content: "";
-    position: absolute;
-    z-index: 4;
-    top: -25%;
-    bottom: -25%;
-    left: -24%;
-    width: 16%;
-    pointer-events: none;
-    opacity: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,.46), transparent);
-    filter: blur(5px);
-    transform: skewX(-17deg);
-    animation: library-scan 8s ease-in-out infinite;
-}
 
 .player-bar:not(.hidden) {
     box-shadow: 0 -16px 50px rgba(19, 18, 16, .22);
@@ -7328,7 +7339,6 @@ body[data-theme="sky"] .spatial-orb-b {
 
 body[data-theme="sky"] .spatial-grid { opacity: .1; }
 body[data-theme="sky"] .brand-icon::before { border-color: rgba(95,174,195,.48); }
-body[data-theme="sky"] .music-row.is-pointer-lit,
 body[data-theme="sky"] .music-card.is-pointer-lit,
 body[data-theme="sky"] .album-card.is-pointer-lit,
 body[data-theme="sky"] .clip-library-row.is-pointer-lit {
@@ -7358,20 +7368,11 @@ body[data-theme="sky"] .clip-library-row.is-pointer-lit {
     62% { opacity: .8; }
     82%, 100% { left: 125%; opacity: 0; }
 }
-@keyframes library-scan {
-    0%, 58% { left: -24%; opacity: 0; }
-    64% { opacity: .22; }
-    88% { left: 112%; opacity: .12; }
-    100% { left: 112%; opacity: 0; }
-}
 @keyframes player-rise { from { transform: translateY(105%); opacity: 0; } }
 @keyframes panel-depth-in { from { transform: translateX(28px) rotateY(-3deg); opacity: .2; } }
 
 @media (prefers-reduced-motion: reduce) {
     .spatial-orb,
-    .music-list::after,
-    .music-row .music-icon:not(:has(img)),
-    .music-row:hover .music-icon,
     .brand-icon,
     .brand-icon::before,
     .topbar .primary-btn::after,
@@ -8097,3 +8098,22 @@ body.view-home .top-nav .nav-count { border: 0; background: none; color: var(--h
 }
 .settings-action .update-menu-badge { color: var(--primary-strong); font-size: 11px; font-weight: 600; }
 .settings-action .update-menu-badge[hidden] { display: none; }
+
+/* Import status remains visible when a partial batch needs attention. */
+.import-progress { display: flex; align-items: center; gap: 12px; padding: 12px 24px; font-size: 13px; }
+.import-progress progress { width: 120px; flex-shrink: 0; accent-color: var(--accent); }
+.import-progress span { overflow-wrap: anywhere; }
+
+/* Assigned tags are direct removal buttons in lists, cards and candidate rows. */
+.tag.removable-tag {
+    border: 0;
+    gap: 4px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.removable-tag .tag-remove-mark { opacity: .65; font-size: 13px; }
+.removable-tag:hover .tag-remove-mark,
+.removable-tag:focus-visible .tag-remove-mark { opacity: 1; }
+.tag.removable-tag:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tag.removable-tag:disabled { opacity: .5; cursor: wait; }

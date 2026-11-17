@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MUSIC_COMPAT_COLUMNS: &[(&str, &str)] = &[
     ("file_bookmark", "BLOB"), ("album_source", "TEXT NOT NULL DEFAULT 'folder'"),
     ("artist", "TEXT DEFAULT ''"), ("genre", "TEXT DEFAULT ''"), ("year", "TEXT DEFAULT ''"),
@@ -133,7 +133,7 @@ fn backup_before_schema_upgrade(conn: &Connection, path: &Path) -> Result<(), St
         let has_album_tags: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='album_tags')", [], |row| row.get(0),
         ).map_err(|e| format!("读取专辑 Tag 表失败: {e}"))?;
-        if recorded.as_deref() == Some(SCHEMA_VERSION.to_string().as_str()) && has_album_tags &&
+        if recorded.as_deref() == Some(SCHEMA_VERSION.to_string().as_str()) && has_album_tags && movie_schema_complete(conn) &&
             MUSIC_COMPAT_COLUMNS.iter().all(|(column, _)| has_column(conn, "music", column)) {
             return Ok(());
         }
@@ -143,6 +143,14 @@ fn backup_before_schema_upgrade(conn: &Connection, path: &Path) -> Result<(), St
     conn.execute("VACUUM main INTO ?1", params![backup.to_string_lossy().as_ref()])
         .map_err(|e| format!("备份原音乐库失败，已停止升级: {e}"))?;
     Ok(())
+}
+
+fn movie_schema_complete(conn: &Connection) -> bool {
+    [("movies", &["id", "name", "name_key", "created_at", "updated_at"][..]),
+     ("music_movie_usages", &["id", "music_id", "movie_id", "note", "created_at", "updated_at"][..])]
+        .iter().all(|(table, columns)| columns.iter().all(|column| has_column(conn, table, column)))
+        && ["idx_movies_name_key", "idx_music_movie_pair", "idx_movie_usages_movie", "idx_movie_usages_music"]
+            .iter().all(|name| conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)", [name], |row| row.get::<_, bool>(0)).unwrap_or(false))
 }
 
 fn unique_upgrade_backup_path(path: &Path) -> Result<PathBuf, String> {
@@ -297,6 +305,27 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_music_genre ON music(genre);
         CREATE INDEX IF NOT EXISTS idx_music_year ON music(year);
         CREATE INDEX IF NOT EXISTS idx_music_created ON music(created_at);
+
+        CREATE TABLE IF NOT EXISTS movies (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL CHECK(length(trim(name)) > 0),
+            name_key    TEXT NOT NULL CHECK(length(name_key) > 0),
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_movies_name_key ON movies(name_key);
+        CREATE INDEX IF NOT EXISTS idx_movies_name ON movies(name COLLATE NOCASE, id);
+        CREATE TABLE IF NOT EXISTS music_movie_usages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            music_id    TEXT NOT NULL REFERENCES music(id) ON DELETE CASCADE,
+            movie_id    INTEGER NOT NULL REFERENCES movies(id) ON DELETE RESTRICT,
+            note        TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_music_movie_pair ON music_movie_usages(music_id, movie_id);
+        CREATE INDEX IF NOT EXISTS idx_movie_usages_music ON music_movie_usages(music_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_movie_usages_movie ON music_movie_usages(movie_id, created_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS clips (
             id          TEXT PRIMARY KEY,

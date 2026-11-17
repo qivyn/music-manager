@@ -12,11 +12,15 @@
 
     /* ---------------- 峰值解码 ---------------- */
 
+    // One bounded, reusable peak envelope per URL; PCM buffers are never cached.
+    const SOURCE_BUCKETS = 2240;
+    const CACHE_LIMIT = 128;
     const peaksCache = new Map();
     const peaksPending = new Map();
     const queue = [];
     let activeJobs = 0;
     let decodeContext = null;
+    const cancelled = () => Object.assign(new Error("波形任务已取消"), { name: "AbortError" });
 
     function getDecodeContext() {
         if (!decodeContext) {
@@ -58,42 +62,90 @@
         return peaks;
     }
 
-    async function decode(url, buckets) {
-        const response = await fetch(url);
+    function resizePeaks(peaks, buckets) {
+        const result = new Float32Array(buckets);
+        for (let i = 0; i < buckets; i++) {
+            const from = Math.floor(i * peaks.length / buckets);
+            const to = Math.max(from + 1, Math.ceil((i + 1) * peaks.length / buckets));
+            for (let j = from; j < to; j++) result[i] = Math.max(result[i], peaks[j] || 0);
+        }
+        return result;
+    }
+
+    async function decode(job) {
+        const response = await fetch(job.url, { signal: job.controller?.signal });
         if (!response.ok) throw new Error("读取音频失败: " + response.status);
         const raw = await response.arrayBuffer();
+        if (!job.clients.size) throw cancelled();
         const buffer = await getDecodeContext().decodeAudioData(raw);
-        return computePeaks(buffer, buckets);
+        return computePeaks(buffer, SOURCE_BUCKETS);
     }
 
     function pump() {
+        queue.sort((a, b) => b.priority - a.priority);
         while (activeJobs < 2 && queue.length) {
             const job = queue.shift();
+            if (!job.clients.size) continue;
+            job.running = true;
             activeJobs++;
-            decode(job.url, job.buckets)
-                .then(job.resolve, job.reject)
-                .finally(() => {
-                    activeJobs--;
-                    pump();
-                });
+            decode(job).then(peaks => {
+                if (!job.clients.size) return;
+                const entry = { peaks, sizes: new Map() };
+                peaksCache.set(job.url, entry);
+                while (peaksCache.size > CACHE_LIMIT) peaksCache.delete(peaksCache.keys().next().value);
+                for (const client of job.clients) {
+                    if (!entry.sizes.has(client.buckets)) entry.sizes.set(client.buckets, resizePeaks(peaks, client.buckets));
+                    client.resolve(entry.sizes.get(client.buckets));
+                }
+            }, error => {
+                for (const client of job.clients) client.reject(error);
+            }).finally(() => {
+                for (const client of job.clients) client.cleanup();
+                job.clients.clear();
+                if (peaksPending.get(job.url) === job) peaksPending.delete(job.url);
+                activeJobs--;
+                pump();
+            });
         }
     }
 
-    function getPeaks(url, buckets) {
-        const key = url + "@" + buckets;
-        if (peaksCache.has(key)) return Promise.resolve(peaksCache.get(key));
-        if (peaksPending.has(key)) return peaksPending.get(key);
-
+    function getPeaks(url, buckets, { signal, priority = 0 } = {}) {
+        buckets = Math.max(1, Math.min(4096, Math.floor(buckets) || 140));
+        if (signal?.aborted) return Promise.reject(cancelled());
+        const entry = peaksCache.get(url);
+        if (entry) {
+            peaksCache.delete(url); peaksCache.set(url, entry);
+            if (!entry.sizes.has(buckets)) {
+                if (entry.sizes.size >= 8) entry.sizes.delete(entry.sizes.keys().next().value);
+                entry.sizes.set(buckets, resizePeaks(entry.peaks, buckets));
+            }
+            return Promise.resolve(entry.sizes.get(buckets));
+        }
+        let job = peaksPending.get(url);
+        if (!job) {
+            const Controller = typeof AbortController === "function" ? AbortController : null;
+            job = { url, clients: new Set(), shared: new Map(), priority, controller: Controller ? new Controller() : null };
+            peaksPending.set(url, job);
+            queue.push(job);
+        }
+        job.priority = Math.max(job.priority, priority);
+        if (!signal && job.shared.has(buckets)) return job.shared.get(buckets);
         const promise = new Promise((resolve, reject) => {
-            queue.push({ url, buckets, resolve, reject });
-            pump();
-        }).then(peaks => {
-            peaksCache.set(key, peaks);
-            return peaks;
-        }).finally(() => {
-            peaksPending.delete(key);
+            const client = { buckets, resolve, reject, cleanup: () => signal?.removeEventListener("abort", abort) };
+            const abort = () => {
+                client.cleanup(); job.clients.delete(client); reject(cancelled());
+                if (!job.clients.size) {
+                    job.controller?.abort();
+                    const index = queue.indexOf(job);
+                    if (index >= 0) queue.splice(index, 1);
+                    if (peaksPending.get(url) === job) peaksPending.delete(url);
+                }
+            };
+            job.clients.add(client);
+            signal?.addEventListener("abort", abort, { once: true });
         });
-        peaksPending.set(key, promise);
+        if (!signal) job.shared.set(buckets, promise);
+        Promise.resolve().then(pump);
         return promise;
     }
 
@@ -159,6 +211,7 @@
         const PLAYER_BUCKETS = 320;
         let currentUrl = "";
         let currentPeaks = null;
+        let playerJob = null;
         let dragging = false;
 
         function currentRatio() {
@@ -201,13 +254,15 @@
             currentUrl = url;
             currentPeaks = null;
             redraw();
-            getPeaks(url, PLAYER_BUCKETS)
+            playerJob?.abort();
+            playerJob = new AbortController();
+            getPeaks(url, PLAYER_BUCKETS, { signal: playerJob.signal, priority: 10 })
                 .then(peaks => {
                     if (url !== currentUrl) return;
                     currentPeaks = peaks;
                     redraw();
                 })
-                .catch(error => console.warn("waveform: 播放器波形解码失败", error));
+                .catch(error => { if (error.name !== "AbortError") console.warn("waveform: 播放器波形解码失败", error); });
         });
 
         audio.addEventListener("timeupdate", () => {
@@ -215,6 +270,7 @@
         });
 
         audio.addEventListener("emptied", () => {
+            playerJob?.abort();
             currentUrl = "";
             currentPeaks = null;
             redraw();
@@ -225,6 +281,7 @@
 
     const ROW_BUCKETS = 140;
     const rowWaves = new WeakMap();
+    const rowJobs = new Map();
 
     function hydrateRowWave(canvas) {
         if (canvas.dataset.waveDone) return;
@@ -236,34 +293,51 @@
         const range = (Number.isFinite(from) && Number.isFinite(to) && to > from)
             ? { from, to }
             : null;
-        getPeaks(url, ROW_BUCKETS)
+        const controller = new AbortController();
+        rowJobs.set(canvas, controller);
+        getPeaks(url, ROW_BUCKETS, { signal: controller.signal })
             .then(peaks => {
                 rowWaves.set(canvas, { peaks, range });
                 if (canvas.isConnected) drawBars(canvas, peaks, 0, range);
             })
-            .catch(() => {
-                // 解码失败的曲目留空，行内布局不受影响
-            });
+            .catch(() => { delete canvas.dataset.waveDone; })
+            .finally(() => { if (rowJobs.get(canvas) === controller) rowJobs.delete(canvas); });
     }
 
+    function cancelRow(canvas) {
+        rowJobs.get(canvas)?.abort();
+        rowJobs.delete(canvas);
+        if (!rowWaves.has(canvas)) delete canvas.dataset.waveDone;
+    }
+    const rowObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(entries => {
+        for (const entry of entries) {
+            if (entry.isIntersecting) hydrateRowWave(entry.target);
+            else cancelRow(entry.target);
+        }
+    }, { rootMargin: "100px" }) : null;
+    const observedRows = new Set();
+    function observeRow(canvas) {
+        observedRows.add(canvas);
+        if (rowObserver) rowObserver.observe(canvas);
+        else hydrateRowWave(canvas);
+    }
     function scanRowWaves(root) {
         if (root.nodeType !== 1) return;
-        if (root.matches && root.matches("canvas.row-wave")) hydrateRowWave(root);
-        if (root.querySelectorAll) {
-            root.querySelectorAll("canvas.row-wave").forEach(hydrateRowWave);
-        }
+        if (root.matches?.("canvas.row-wave")) observeRow(root);
+        root.querySelectorAll?.("canvas.row-wave").forEach(observeRow);
     }
-
     const contentArea = document.getElementById("contentArea");
     if (contentArea) {
         new MutationObserver(mutations => {
-            for (const mutation of mutations) {
-                mutation.addedNodes.forEach(scanRowWaves);
+            for (const canvas of observedRows) {
+                if (!canvas.isConnected) {
+                    cancelRow(canvas); rowObserver?.unobserve(canvas); observedRows.delete(canvas);
+                }
             }
+            for (const mutation of mutations) mutation.addedNodes.forEach(scanRowWaves);
         }).observe(contentArea, { childList: true, subtree: true });
     }
-
-    document.querySelectorAll("canvas.row-wave").forEach(hydrateRowWave);
+    document.querySelectorAll("canvas.row-wave").forEach(observeRow);
 
     // Canvas pixels do not follow CSS changes; repaint cached rows as well as
     // the player, including while playback is paused. No audio decoding needed.

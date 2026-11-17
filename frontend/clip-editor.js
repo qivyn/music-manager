@@ -1,0 +1,796 @@
+/* Clip editing, preview and persistence. Shared application state lives in app.js. */
+
+async function renderClipTagSuggestions() {
+    const version = clipEditorRequestVersion;
+
+    const container =
+        $("clipTagSuggestions");
+
+    const data = await loadTagPickerData();
+    if (version !== clipEditorRequestVersion) return;
+    container.innerHTML = renderTagPickerGroups({
+        excludeIds: state.clipTagIds,
+        attr: "suggestion-tag",
+        data
+    });
+}
+
+
+/* =========================================================
+   添加 Clip Tag
+========================================================= */
+
+function addClipTag() {
+
+    const input =
+        $("clipTagInput");
+
+    const value = normalizeTag(input.value);
+
+    if (!value) {
+        return;
+    }
+
+
+    if (
+        !state.clipTags.includes(value)
+    ) {
+
+        state.clipTags.push(value);
+        state.clipTagIds.push(null);
+    }
+
+
+    input.value = "";
+
+    renderClipTags();
+}
+
+
+function renderClipTags() {
+
+    $("clipTags").innerHTML =
+        state.clipTags
+            .map(
+                (tag, index) => `
+
+                    <span class="editing-tag">
+
+                        #${escapeHTML(tag)}
+
+                        <button
+                            data-remove-clip-tag="${index}"
+                        >
+                            ×
+                        </button>
+
+                    </span>
+
+                `
+            )
+            .join("");
+}
+
+
+/* =========================================================
+   Clip Modal
+========================================================= */
+
+let clipEditorRequestVersion = 0;
+let clipEditorOpenRequestVersion = 0;
+
+async function openClipEditorForMusic(id) {
+    const intent = ++clipEditorOpenRequestVersion;
+    while (intent === clipEditorOpenRequestVersion) {
+        const dataVersion = libraryCache.versions.music;
+        const music = await dbGet("music", id);
+        if (!music || intent !== clipEditorOpenRequestVersion) return;
+        if (dataVersion !== libraryCache.versions.music) continue;
+        return openClipEditor(music, null, intent);
+    }
+}
+
+async function openClipEditorForClip(id) {
+    const intent = ++clipEditorOpenRequestVersion;
+    while (intent === clipEditorOpenRequestVersion) {
+        while (clipMutationQueues.has(id)) {
+            await clipMutationQueues.get(id).catch(() => {});
+            if (intent !== clipEditorOpenRequestVersion) return;
+        }
+        const musicVersion = libraryCache.versions.music, clipVersion = libraryCache.versions.clips;
+        const clip = await dbGet("clips", id);
+        if (!clip || intent !== clipEditorOpenRequestVersion) return;
+        const music = await dbGet("music", clip.musicId);
+        if (!music || intent !== clipEditorOpenRequestVersion) return;
+        if (clipMutationQueues.has(id) || musicVersion !== libraryCache.versions.music || clipVersion !== libraryCache.versions.clips) continue;
+        return openClipEditor(music, clip, intent);
+    }
+}
+
+async function handleClipAction(id, action) {
+    // Register playback/editor intent at the click, before any preparatory read.
+    if (action === "play") {
+        if (state.player.segment?.clipId === id) return togglePlay();
+        return playClip({ id });
+    }
+    if (action === "edit") return openClipEditorForClip(id);
+    if (action === "candidate") return toggleClipCandidate(id);
+    if (action === "delete") return deleteClip(id);
+    if (action === "export") {
+        const clip = await dbGet("clips", id);
+        if (!clip) return;
+        const music = await dbGet("music", clip.musicId);
+        if (music) return exportClip(clip, music);
+    }
+}
+
+async function openClipEditor(music, clip = null, reservedIntent = null) {
+    const intent = reservedIntent ?? ++clipEditorOpenRequestVersion;
+    if (intent !== clipEditorOpenRequestVersion) return;
+    if (!clipEditorPanel.classList.contains("hidden") && isClipEditorDirty()) {
+        const discard = await confirm("片段编辑尚未保存，确定放弃这些修改吗？", "放弃片段修改");
+        if (!discard || intent !== clipEditorOpenRequestVersion) return;
+    }
+    const version = ++clipEditorRequestVersion;
+    const current = () => version === clipEditorRequestVersion && state.clipMusic?.id === music.id;
+
+    pausePlayerKeepPosition();
+
+    const playerAt = state.player.music && state.player.music.id === music.id
+        ? getAudio().currentTime
+        : 0;
+
+    state.clipMusic =
+        music;
+
+    state.editingClip =
+        clip;
+    state.clipInitialState = null;
+    state.clipPreviewing = false;
+    state.clipFullPreviewing = false;
+    const previousAudio = $("clipAudio");
+    previousAudio.pause();
+    previousAudio.onloadedmetadata = null;
+    previousAudio.ontimeupdate = null;
+    previousAudio.onended = null;
+    previousAudio.removeAttribute("src");
+    previousAudio.load();
+    state.clipNameAutoGenerated = !clip;
+
+    state.clipStart = clip ? clip.start : Math.max(0, playerAt || 0);
+    state.clipEnd = clip ? clip.end : Math.min(
+        music.duration || state.clipStart + 10,
+        state.clipStart + 10
+    );
+
+    state.clipDuration =
+        music.duration || 0;
+
+    state.clipTags =
+        [...(clip?.tags || [])];
+    state.clipTagIds = [...(clip?.tagIds || [])];
+
+
+    $("clipMusicId").value =
+        music.id;
+
+    $("clipEditorMusicName").textContent =
+        music.name;
+
+    $("clipEditorTitle").textContent =
+        clip ? "编辑音乐片段" : "新建音乐片段";
+
+    $("clipName").value =
+        clip?.name || "";
+    $("previewClipBtn").textContent = "▶ 循环试听";
+    $("playFullTrackBtn").textContent = "▶ 从头试听";
+
+
+    renderClipTags();
+    updateTimeline();
+    state.clipInitialState = getClipEditorSnapshot();
+
+    await renderClipTagSuggestions();
+    if (!current()) return;
+
+
+    /*
+     * 加载原音乐
+     */
+
+    if (!music.path) {
+
+        showToast(
+            "该音乐没有关联文件路径，请重新选择文件"
+        );
+
+        return;
+    }
+
+
+    try {
+
+        const exists =
+            await invoke("file_exists", {
+                path: music.path
+            });
+        if (!current()) return;
+
+        if (!exists) {
+
+            showToast(
+                "文件不存在，可能已经被移动或删除"
+            );
+
+            return;
+        }
+
+
+        const url =
+            convertFileSrc(music.path);
+
+
+        const audio =
+            $("clipAudio");
+
+
+        audio.src = url;
+
+
+        audio.onloadedmetadata = () => {
+            if (!current()) return;
+            const dirty = isClipEditorDirty();
+            state.clipDuration = audio.duration;
+            if (!state.editingClip) {
+                state.clipStart = Math.min(state.clipStart, Math.max(0, audio.duration - 0.1));
+                state.clipEnd = Math.min(audio.duration, dirty ? state.clipEnd : state.clipStart + 10);
+                if (state.clipEnd <= state.clipStart) state.clipStart = Math.max(0, audio.duration - 0.1);
+            }
+            audio.currentTime = state.clipStart;
+            updateTimeline();
+            if (!dirty) state.clipInitialState = getClipEditorSnapshot();
+        };
+
+
+            audio.ontimeupdate =
+            () => {
+                if (!current()) return;
+                updateClipPlayhead();
+                $("clipCurrentTime").textContent = `${formatTime(audio.currentTime)} / ${formatTime(state.clipDuration)}`;
+
+                if (
+                    state.clipPreviewing &&
+                    audio.currentTime >= state.clipEnd
+                ) {
+                    audio.currentTime = state.clipStart;
+                    audio.play().catch(() => {
+                        if (!current()) return;
+                        state.clipPreviewing = false;
+                        $("previewClipBtn").textContent = "▶ 循环试听";
+                    });
+                }
+            };
+
+        audio.onended = () => {
+            if (!current()) return;
+            state.clipPreviewing = false;
+            state.clipFullPreviewing = false;
+            $("previewClipBtn").textContent = "▶ 循环试听";
+            $("playFullTrackBtn").textContent = "▶ 从头试听";
+        };
+
+
+        clipEditorPanel.classList.remove(
+            "hidden"
+        );
+
+
+        updateTimeline();
+
+    } catch (error) {
+        if (!current()) return;
+        console.error(error);
+        showToast("无法读取原音乐文件");
+    }
+}
+
+function getClipEditorSnapshot() {
+    return JSON.stringify({
+        start: Number(state.clipStart.toFixed(3)),
+        end: Number(state.clipEnd.toFixed(3)),
+        name: $("clipName").value.trim(),
+        tags: [...state.clipTags],
+        tagIds: [...state.clipTagIds]
+    });
+}
+
+function isClipEditorDirty() {
+    return Boolean(state.clipInitialState && state.clipInitialState !== getClipEditorSnapshot());
+}
+
+
+/* =========================================================
+   Timeline
+========================================================= */
+
+function updateClipPlayhead() {
+
+    const playhead = $("timelinePlayhead");
+    const audio = $("clipAudio");
+
+    if (!playhead || !state.clipDuration) {
+        return;
+    }
+
+    playhead.style.left =
+        Math.min(100, Math.max(0,
+            audio.currentTime / state.clipDuration * 100
+        )) + "%";
+}
+
+
+function updateTimeline() {
+
+    const duration =
+        state.clipDuration;
+
+
+    if (!duration) {
+        return;
+    }
+
+
+    const startPercent =
+        state.clipStart /
+        duration *
+        100;
+
+    const endPercent =
+        state.clipEnd /
+        duration *
+        100;
+
+
+    const selection =
+        $("timelineSelection");
+
+
+    selection.style.left =
+        startPercent + "%";
+
+    selection.style.width =
+        (endPercent - startPercent) +
+        "%";
+
+
+    $("clipStartInput").value = formatTime(state.clipStart);
+    $("clipEndInput").value = formatTime(state.clipEnd);
+    $("clipSelectionDuration").textContent = `选区 ${formatTime(state.clipEnd - state.clipStart)}`;
+    updateAutoClipName();
+    $("clipCurrentTime").textContent = `${formatTime($("clipAudio").currentTime)} / ${formatTime(duration)}`;
+}
+
+function updateAutoClipName() {
+    if (!state.clipNameAutoGenerated || !state.clipMusic) return;
+    $("clipName").value = `${state.clipMusic.name} · ${formatTime(state.clipStart)}–${formatTime(state.clipEnd)}`;
+}
+
+
+/* =========================================================
+   Timeline 拖动
+========================================================= */
+
+function timelinePositionToTime(
+    event
+) {
+
+    const rect =
+        $("timelineTrack")
+            .getBoundingClientRect();
+
+
+    let x =
+        event.clientX -
+        rect.left;
+
+
+    x =
+        Math.max(
+            0,
+            Math.min(
+                rect.width,
+                x
+            )
+        );
+
+
+    return (
+        x /
+        rect.width *
+        state.clipDuration
+    );
+}
+
+
+function setupTimeline() {
+
+    const track =
+        $("timelineTrack");
+
+    const startHandle =
+        $("startHandle");
+
+    const endHandle =
+        $("endHandle");
+
+
+    startHandle.addEventListener(
+        "mousedown",
+        event => {
+
+            event.preventDefault();
+
+            state.draggingHandle =
+                "start";
+        }
+    );
+
+
+    endHandle.addEventListener(
+        "mousedown",
+        event => {
+
+            event.preventDefault();
+
+            state.draggingHandle =
+                "end";
+        }
+    );
+
+
+    document.addEventListener(
+        "mousemove",
+        event => {
+
+            if (
+                !state.draggingHandle
+            ) {
+                return;
+            }
+
+
+            const time =
+                timelinePositionToTime(
+                    event
+                );
+
+
+            if (
+                state.draggingHandle ===
+                "start"
+            ) {
+
+                state.clipStart =
+                    Math.min(
+                        time,
+                        state.clipEnd - 0.1
+                    );
+
+            } else {
+
+                state.clipEnd =
+                    Math.max(
+                        time,
+                        state.clipStart + 0.1
+                    );
+            }
+
+
+            updateTimeline();
+        }
+    );
+
+
+    document.addEventListener(
+        "mouseup",
+        () => {
+
+            state.draggingHandle =
+                null;
+        }
+    );
+
+
+    /*
+     * 点击时间轴：
+     * 移动播放位置
+     */
+
+    track.addEventListener(
+        "click",
+        event => {
+
+            if (
+                state.draggingHandle
+            ) {
+                return;
+            }
+
+
+            const time =
+                timelinePositionToTime(
+                    event
+                );
+
+
+            $("clipAudio").currentTime =
+                time;
+        }
+    );
+}
+
+
+/* =========================================================
+   当前时间设置开始 / 结束
+========================================================= */
+
+function applyClipTimeInput(kind) {
+    const input = $(kind === "start" ? "clipStartInput" : "clipEndInput");
+    const value = parseTime(input.value);
+    if (!Number.isFinite(value) || !state.clipDuration) {
+        updateTimeline();
+        return;
+    }
+    if (kind === "start") state.clipStart = Math.max(0, Math.min(value, state.clipEnd - 0.1));
+    else state.clipEnd = Math.min(state.clipDuration, Math.max(value, state.clipStart + 0.1));
+    updateTimeline();
+}
+
+
+function setupClipEditorControls() {
+$("setStartBtn")
+    .addEventListener(
+        "click",
+        () => {
+
+            const time =
+                $("clipAudio").currentTime;
+
+            state.clipStart = Math.min(time, Math.max(0, state.clipDuration - 0.1));
+            if (state.clipEnd <= state.clipStart) {
+                state.clipEnd = Math.min(state.clipDuration, state.clipStart + 10);
+            }
+
+            updateTimeline();
+        }
+    );
+
+$("setEndBtn")
+    .addEventListener(
+        "click",
+        () => {
+
+            const time =
+                $("clipAudio").currentTime;
+
+            state.clipEnd = Math.max(0.1, time);
+            if (state.clipEnd <= state.clipStart) {
+                state.clipStart = Math.max(0, state.clipEnd - 10);
+            }
+            if (state.clipEnd <= state.clipStart) {
+                state.clipEnd = Math.min(state.clipDuration, state.clipStart + 0.1);
+            }
+
+            updateTimeline();
+        }
+    );
+
+
+}
+
+/* =========================================================
+   保存片段
+========================================================= */
+
+async function previewClipSelection() {
+    const version = clipEditorRequestVersion;
+
+    const audio = $("clipAudio");
+
+    if (!state.clipMusic || !audio.src || !state.clipDuration) {
+        return;
+    }
+
+    if (state.clipPreviewing) {
+        audio.pause();
+        state.clipPreviewing = false;
+        $("previewClipBtn").textContent = "▶ 循环试听";
+        return;
+    }
+
+    state.clipFullPreviewing = false;
+    $("playFullTrackBtn").textContent = "▶ 从头试听";
+    audio.currentTime = state.clipStart;
+    state.clipPreviewing = true;
+    $("previewClipBtn").textContent = "Ⅱ 停止循环";
+
+    try {
+        await audio.play();
+    } catch (error) {
+        if (version !== clipEditorRequestVersion) return;
+        state.clipPreviewing = false;
+        $("previewClipBtn").textContent = "▶ 循环试听";
+    }
+}
+
+async function playFullTrack() {
+    const version = clipEditorRequestVersion;
+    const audio = $("clipAudio");
+    if (!state.clipMusic || !audio.src || !state.clipDuration) return;
+    if (state.clipFullPreviewing) {
+        audio.pause();
+        state.clipFullPreviewing = false;
+        $("playFullTrackBtn").textContent = "▶ 继续试听";
+        return;
+    }
+    state.clipPreviewing = false;
+    $("previewClipBtn").textContent = "▶ 循环试听";
+    if ($("playFullTrackBtn").textContent.includes("从头") || audio.currentTime >= state.clipDuration) audio.currentTime = 0;
+    state.clipFullPreviewing = true;
+    $("playFullTrackBtn").textContent = "Ⅱ 暂停原曲";
+    try {
+        await audio.play();
+    } catch (error) {
+        if (version !== clipEditorRequestVersion) return;
+        state.clipFullPreviewing = false;
+        $("playFullTrackBtn").textContent = "▶ 从头试听";
+    }
+}
+
+
+async function closeClipEditor(force = false, preserveRequest = false) {
+    const version = clipEditorRequestVersion;
+    const intent = preserveRequest ? clipEditorOpenRequestVersion : ++clipEditorOpenRequestVersion;
+
+    if (force !== true && isClipEditorDirty()) {
+        const discard = await confirm("片段编辑尚未保存，确定放弃这些修改吗？", "放弃片段修改");
+        if (!discard) return false;
+    }
+    if (version !== clipEditorRequestVersion || intent !== clipEditorOpenRequestVersion) return false;
+    clipEditorRequestVersion++;
+
+    const audio = $("clipAudio");
+    audio.onloadedmetadata = null;
+    audio.ontimeupdate = null;
+    audio.onended = null;
+
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+
+    state.clipMusic = null;
+    state.editingClip = null;
+    state.clipPreviewing = false;
+    state.clipFullPreviewing = false;
+    state.clipNameAutoGenerated = false;
+    state.clipTags = [];
+    state.clipTagIds = [];
+    state.clipDuration = 0;
+    state.clipInitialState = null;
+    clipEditorPanel.classList.add("hidden");
+    return true;
+}
+
+
+async function saveClip() {
+
+    if (!state.clipMusic || saveClip.isSaving) {
+        return;
+    }
+
+    const musicId = state.clipMusic.id;
+    const editorVersion = clipEditorRequestVersion;
+    const editorIntent = clipEditorOpenRequestVersion;
+    const contextRequest = musicContextRequest;
+    const original = state.editingClip;
+
+
+    if (
+        state.clipEnd <=
+        state.clipStart
+    ) {
+
+        showToast(
+            "片段结束时间必须大于开始时间"
+        );
+
+        return;
+    }
+
+
+    saveClip.isSaving = true;
+    $("saveClipBtn").disabled = true;
+
+    const clip = {
+
+        id:
+            state.editingClip?.id ||
+            createId("clip_"),
+
+        musicId:
+            state.clipMusic.id,
+
+        name:
+            $("clipName").value.trim()
+            || "未命名片段",
+
+        start:
+            state.clipStart,
+
+        end:
+            state.clipEnd,
+
+        tags:
+            [...state.clipTags],
+        tagIds:
+            [...state.clipTagIds],
+
+        createdAt:
+            state.editingClip?.createdAt ||
+            Date.now(),
+
+        updatedAt:
+            Date.now()
+    };
+
+
+    try {
+        if (original) {
+            const saved = await mutateClip(clip.id, current => {
+                const patch = mergeTagDraft(current, original, clip);
+                for (const field of ["name", "start", "end"]) {
+                    if (clip[field] !== original[field]) patch[field] = clip[field];
+                }
+                return patch;
+            });
+            if (!saved) throw new Error("片段已被移除");
+        } else {
+            await dbAdd("clips", clip);
+        }
+    } catch (error) {
+        console.error(error);
+        showToast("片段保存失败");
+        return;
+    } finally {
+        saveClip.isSaving = false;
+        $("saveClipBtn").disabled = false;
+    }
+
+
+    if (editorVersion === clipEditorRequestVersion && editorIntent === clipEditorOpenRequestVersion) await closeClipEditor(true);
+
+
+    await updateCounts();
+
+    await render();
+
+    await renderSidebarTags();
+    await renderCandidatePanel();
+
+
+    await refreshMusicContext(contextRequest, musicId);
+
+
+    showToast(
+        "音乐片段已保存"
+    );
+}
+
+
+/* =========================================================
+   删除片段
+========================================================= */
+
+/* =========================================================
+   删除音乐
+========================================================= */

@@ -6,6 +6,33 @@ const V011: &str = include_str!("../tests/fixtures/v0.1.1.sql");
 const V012: &str = include_str!("../tests/fixtures/v0.1.2.sql");
 const V020: &str = include_str!("../tests/fixtures/v0.2.0.sql");
 const V021: &str = include_str!("../tests/fixtures/v0.2.1.sql");
+const V4: &str = include_str!("../tests/fixtures/schema-v4.sql");
+
+#[test]
+fn movie_schema_fixture_reopens_without_backup_or_losing_associations() {
+    let fixture=Fixture::new();let path=fixture.0.join("library.db");
+    let conn=Connection::open(&path).unwrap();conn.execute_batch(V4).unwrap();
+    conn.execute("UPDATE app_metadata SET value=?1 WHERE key='app_version'",[APP_VERSION]).unwrap();
+    seed(&conn,&fixture.0.join("sample.wav"));
+    conn.execute_batch("INSERT INTO movies VALUES(1,'电影','电影',1,1); INSERT INTO music_movie_usages VALUES(1,'old-music',1,'片尾',1,1);").unwrap();
+    save_db_path_to(&settings_path(&fixture.0),&path).unwrap();drop(conn);
+    let (_,opened)=open_startup_database(&fixture.0).unwrap().unwrap();
+    assert_eq!(opened.query_row("SELECT note FROM music_movie_usages",[],|r|r.get::<_,String>(0)).unwrap(),"片尾");
+    assert!(!fs::read_dir(&fixture.0).unwrap().any(|p|p.unwrap().file_name().to_string_lossy().starts_with("library.pre-")));
+    assert!(check_rollback_compatibility(&fixture.0,3).is_err());
+    assert!(check_rollback_compatibility(&fixture.0,4).is_ok());
+}
+
+#[test]
+fn missing_movie_table_cannot_bypass_backup_even_with_current_schema_stamp() {
+    let fixture=Fixture::new();let path=fixture.0.join("library.db");
+    let conn=Connection::open(&path).unwrap();conn.execute_batch(V4).unwrap();
+    conn.execute("DROP TABLE music_movie_usages",[]).unwrap();save_db_path_to(&settings_path(&fixture.0),&path).unwrap();
+    let before=snapshot(&conn);drop(conn);
+    let (_,opened)=open_startup_database(&fixture.0).unwrap().unwrap();assert!(movie_schema_complete(&opened));
+    let backup=fs::read_dir(&fixture.0).unwrap().map(|p|p.unwrap().path()).find(|p|p.file_name().unwrap().to_string_lossy().starts_with("library.pre-schema-4-")).unwrap();
+    assert_eq!(snapshot(&Connection::open(backup).unwrap()),before);
+}
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -77,7 +104,8 @@ fn every_released_database_opens_in_place_with_all_user_data_and_wal_preserved()
     for (version, schema) in [
         ("0.1.0", V010), ("0.1.1", V011), ("0.1.2", V012), ("0.1.3", V012),
         ("0.2.0", V020), ("0.2.1", V021), ("0.2.2", V021), ("0.2.3", V021),
-        ("0.2.4", V021), ("0.2.5", V021),
+        ("0.2.4", V021), ("0.2.5", V021), ("0.2.6", V021), ("0.2.7", V021),
+        ("0.2.8", V021), ("0.2.9", V021), ("0.2.10", V021), ("0.2.11", V021),
     ] {
         for external in [false, true] {
             let fixture = Fixture::new();
@@ -98,7 +126,8 @@ fn every_released_database_opens_in_place_with_all_user_data_and_wal_preserved()
             let old_tags = rows(&original, "tags", "id,name,created_at");
             let old_clips = rows(&original, "clips", "*");
             let candidates = rows(&original, "candidate_entries", "*");
-            let needs_backup = version.starts_with("0.1.") || version == "0.2.0";
+            // Every released fixture predates schema 4 and needs a complete backup.
+            let needs_backup = true;
             save_db_path_to(&settings_path(&local), &path).unwrap();
             let settings = fs::read(settings_path(&local)).unwrap();
             assert!(fs::metadata(library.join("library.db-wal")).unwrap().len() > 0);
@@ -130,6 +159,8 @@ fn every_released_database_opens_in_place_with_all_user_data_and_wal_preserved()
                 let saved = Connection::open_with_flags(backup, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
                 assert_eq!(snapshot(&saved), before, "backup lost original data for {version}");
             }
+            assert_eq!(conn.query_row("SELECT COUNT(*) FROM movies", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+            assert_eq!(conn.query_row("SELECT COUNT(*) FROM music_movie_usages", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
             // Normal writes and subsequent launches keep using this exact same library.
             conn.execute("UPDATE music SET name='升级后继续编辑' WHERE id='old-music'", []).unwrap();
             assert_eq!(original.query_row("SELECT name FROM music", [], |r| r.get::<_, String>(0)).unwrap(), "升级后继续编辑");

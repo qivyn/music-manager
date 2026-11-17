@@ -41,7 +41,7 @@ test("night: cat and yarn do not accidentally open the sofa or rug", () => {
     assert.equal(destination("night", 1400, 810), "cat");
     assert.equal(destination("night", 850, 830), "clips");
     assert.equal(destination("night", 1500, 760), "library");
-    assert.equal(destination("night", 1050, 940), "recent");
+    assert.equal(destination("night", 1050, 940), undefined, "the hidden Recent page has no rug shortcut");
     assert.equal(destination("night", 250, 400), undefined);
 });
 
@@ -50,7 +50,7 @@ test("cream: the opposite cat pose uses its own entrance map", () => {
     assert.equal(destination("cream", 970, 660), "cat");
     assert.equal(destination("cream", 750, 840), "clips");
     assert.equal(destination("cream", 1460, 680), "library");
-    assert.equal(destination("cream", 1150, 930), "recent");
+    assert.equal(destination("cream", 1150, 930), undefined, "the hidden Recent page has no rug shortcut");
     assert.equal(destination("cream", 250, 400), undefined);
 });
 
@@ -63,6 +63,7 @@ test("both app entry points load the illustrated scene without the old 3D depend
         assert.match(html, /id="sceneMotionBtn"[^>]+role="menuitemcheckbox"/);
         assert.match(html, /href="home-scene.css"/);
         assert.doesNotMatch(html, /src="(?:turntable.js|vendor\/three.min.js)"/);
+        assert.doesNotMatch(html, /data-view="recent"|id="filterToggleBtn"|id="filterPanel"/);
         const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
         assert.equal(ids.length, new Set(ids).size, entry + " must not duplicate control IDs");
     }

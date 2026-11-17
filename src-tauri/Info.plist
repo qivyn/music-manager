@@ -3,5 +3,5 @@
 <plist version="1.0"><dict>
     <key>MusicManagerExitProtocol</key><integer>2</integer>
   <key>MusicManagerStartupProtocol</key><integer>1</integer>
-  <key>MusicManagerDatabaseSchema</key><integer>3</integer>
+  <key>MusicManagerDatabaseSchema</key><integer>4</integer>
 </dict></plist>
