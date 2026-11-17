@@ -27,6 +27,7 @@ pub struct LibraryQuery {
     pub exclude_movie_id: Option<i64>,
     pub exclude_music_id: Option<String>,
     pub anchor_movie_id: Option<i64>,
+    pub anchor_music_id: Option<String>,
     pub movie_usage_status: String,
     pub page: u64,
     pub page_size: u64,
@@ -395,14 +396,20 @@ pub(super) fn query_page_in(
     };
     let total_pages = total.div_ceil(page_size).max(1);
     let mut page = query.page.max(1).min(total_pages);
-    if query.kind == "movies" {
-        if let Some(anchor) = query.anchor_movie_id {
-            let mut values = sql.values.clone();
-            let anchor = bind(&mut values, anchor);
-            let rank: Option<u64> = tx.query_row(&format!("{},ranked AS (SELECT movie_id,ROW_NUMBER() OVER(ORDER BY {}) AS position FROM rows) SELECT position FROM ranked WHERE movie_id={anchor}",sql.cte,sql.order),params_from_iter(values.iter()),|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-            if let Some(rank) = rank {
-                page = (rank - 1) / page_size + 1;
-            }
+    let anchor = match query.kind.as_str() {
+        "movies" => query.anchor_movie_id.map(|id| ("movie_id", Value::Integer(id))),
+        "music" => query.anchor_music_id.as_ref().map(|id| ("id", Value::Text(id.clone()))),
+        _ => None,
+    };
+    if let Some((column, anchor)) = anchor {
+        let mut values = sql.values.clone();
+        let anchor = bind(&mut values, anchor);
+        let rank: Option<u64> = tx.query_row(
+            &format!("{},ranked AS (SELECT {column},ROW_NUMBER() OVER(ORDER BY {}) AS position FROM rows) SELECT position FROM ranked WHERE {column}={anchor}", sql.cte, sql.order),
+            params_from_iter(values.iter()), |r| r.get(0),
+        ).optional().map_err(|e| e.to_string())?;
+        if let Some(rank) = rank {
+            page = (rank - 1) / page_size + 1;
         }
     }
     let limit = bind(&mut sql.values, page_size as i64);

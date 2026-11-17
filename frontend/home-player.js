@@ -158,7 +158,7 @@ async function auditionHomeMusic(item = homeSelectedTrack(), options = {}) {
 async function refreshHomeQueue(selected = homeSelectedTrack()) {
     const version = homeAuditionVersion;
     const page = await invoke("query_library_page", { query: { kind: "music", newest: true,
-        page: Math.floor((selected?.libraryPosition || 0) / 10) + 1, pageSize: 10 } });
+        anchorMusicId: selected?.id, page: Math.floor((selected?.libraryPosition || 0) / 10) + 1, pageSize: 10 } });
     if (version !== homeAuditionVersion) return;
     syncHomeTracks(page.items);
 }

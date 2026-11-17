@@ -135,7 +135,8 @@ function invalidateLibraryQueries(command, result) {
 let libraryRenderVersion = 0;
 const libraryPageRequests = new Map();
 function libraryFilters() {
-    return { search: state.search, activeTagIds: [...state.activeTagIds], movieUsageStatus: state.movieUsageStatus };
+    return { search: state.search, activeTagIds: [...state.activeTagIds],
+        movieUsageStatus: state.currentView === "clips" ? "all" : state.movieUsageStatus };
 }
 async function requestLibraryPage(query, key, defaultSize = PAGE_SIZE) {
     const request = { ...query, page: state.pages[key] || 1, pageSize: Number(state.pageSizes[key]) || defaultSize };

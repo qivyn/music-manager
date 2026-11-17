@@ -65,7 +65,15 @@
             return rows.map((m,index)=>({...movieSummary(m),...(q.movieId!=null ? {movieUsageId:usages.find(u=>u.musicId===m.id&&u.movieId===q.movieId).id,movieUsageNote:usages.find(u=>u.musicId===m.id&&u.movieId===q.movieId).note}:{}),coverArt:"",clipCount:clips.filter(c=>c.musicId===m.id).length,libraryPosition:index,libraryTotal:rows.length}));
         };
         return {
-            page(q) { const rows=rowsFor(q),pageSize=Math.max(1,Math.min(100,q.pageSize || 50)),total=rows.length,totalPages=Math.max(1,Math.ceil(total/pageSize)),requested=q.kind==="movies"&&q.anchorMovieId&&rows.some(m=>m.id===q.anchorMovieId)?Math.floor(rows.findIndex(m=>m.id===q.anchorMovieId)/pageSize)+1:q.page||1,page=Math.min(totalPages,Math.max(1,requested)); return {items:rows.slice((page-1)*pageSize,page*pageSize),page,pageSize,total,totalPages}; },
+            page(q) {
+                const rows = rowsFor(q), pageSize = Math.max(1, Math.min(100, q.pageSize || 50));
+                const total = rows.length, totalPages = Math.max(1, Math.ceil(total / pageSize));
+                const anchor = q.kind === "movies" ? q.anchorMovieId : q.kind === "music" ? q.anchorMusicId : null;
+                const index = anchor == null ? -1 : rows.findIndex(item => item.id === anchor);
+                const requested = index >= 0 ? Math.floor(index / pageSize) + 1 : q.page || 1;
+                const page = Math.min(totalPages, Math.max(1, requested));
+                return { items: rows.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages };
+            },
             neighbor(q,id,direction) {const rows=rowsFor(q),index=rows.findIndex(m=>m.id===id);return index<0 ? null : rows[index+direction] || null;},
             related(ids,album) {return album != null ? music.filter(m=>(m.album||"").trim()===album).map(m=>m.id):clips.filter(c=>ids.includes(c.musicId)).map(c=>c.id);}
         };

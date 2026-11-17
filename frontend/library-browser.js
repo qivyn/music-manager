@@ -107,7 +107,7 @@ function updatePageHeader() {
 
 function libraryEmptyHTML(kind = "music") {
     const search = kind === "album" && state.catalogSelection == null ? state.albumSearch : state.search;
-    const filtered = Boolean(search || state.activeTagIds.length || state.movieUsageStatus !== "all");
+    const filtered = Boolean(search || state.activeTagIds.length || libraryFilters().movieUsageStatus !== "all");
     const recent = state.currentView === "recent";
     const title = filtered ? "没有匹配结果" : recent && state.recentMode === "used" ? "暂无播放记录"
         : kind === "clips" ? "还没有音乐片段" : kind === "tag" ? "还没有 Tag" : kind === "album" ? "还没有专辑" : "还没有音乐";
@@ -133,7 +133,7 @@ async function render() {
     if (state.currentView === "movies") { await renderMoviesView(current);return; }
     const query = libraryFilters();
     if (state.currentView === "home") {
-        const page = await requestLibraryPage({ kind: "music", newest: true }, "home", 10);
+        const page = await requestLibraryPage({ kind: "music", newest: true, anchorMusicId: state.player.music?.id || homeSelectedId }, "home", 10);
         if (current()) renderHome(page.items, []);
         return;
     }

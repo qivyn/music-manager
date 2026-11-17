@@ -253,6 +253,39 @@ fn sql_pages_filter_before_limiting_and_clamp_after_deletion() {
 }
 
 #[test]
+fn sql_music_anchor_locates_current_track_and_repositions_after_deletion() {
+    use super::library_query::{query_page_in, LibraryQuery};
+    let (_dir, conn) = library();
+    for i in 0..25 {
+        let id = format!("m{i:02}");
+        seed_music(&conn, &id, "Album");
+        conn.execute("UPDATE music SET created_at=?1 WHERE id=?2", params![i, id]).unwrap();
+    }
+    // Exercise the camelCase IPC payload, including the optional anchor.
+    let mut query: LibraryQuery = serde_json::from_value(serde_json::json!({
+        "kind": "music", "newest": true, "pageSize": 10, "anchorMusicId": "m04"
+    })).unwrap();
+    let page = query_page_in(&conn, &query).unwrap();
+    assert_eq!((page.page, page.total, page.items.len()), (3, 25, 5));
+    assert_eq!(page.items[0]["id"], "m04");
+    assert_eq!(page.items[0]["libraryPosition"], 20);
+    assert_eq!(page.items[0]["libraryTotal"], 25);
+    conn.execute("DELETE FROM music WHERE id='m24'", []).unwrap();
+    let page = query_page_in(&conn, &query).unwrap();
+    assert_eq!((page.page, page.total, page.items.len()), (2, 24, 10));
+    assert_eq!(page.items[9]["id"], "m04");
+    assert_eq!(page.items[9]["libraryPosition"], 19);
+    // A removed or filtered-out anchor falls back to normal clamped pagination.
+    conn.execute("DELETE FROM music WHERE id='m04'", []).unwrap();
+    query.page = 99;
+    assert_eq!(query_page_in(&conn, &query).unwrap().page, 3);
+    query.search = "m23".into();
+    let page = query_page_in(&conn, &query).unwrap();
+    assert_eq!((page.page, page.total), (1, 1));
+    assert_eq!(page.items[0]["id"], "m23");
+}
+
+#[test]
 fn sql_pages_preserve_tag_dimensions_descendants_and_clip_search() {
     use super::library_query::{query_page_in, LibraryQuery};
     let (_dir,conn)=library();

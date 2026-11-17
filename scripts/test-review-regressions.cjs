@@ -1247,6 +1247,59 @@ test('SQL page request coalesces overlapping identical reads without keeping ful
     assert.equal(calls,1);
 });
 
+for (const { id, previous, next, direction, destination } of [
+    { id: 'm5', previous: true, next: true, direction: 1, destination: 'm4' },
+    { id: 'm5', previous: true, next: true, direction: -1, destination: 'm6' },
+    { id: 'm1', previous: true, next: false, direction: -1, destination: 'm2' },
+    { id: 'm20', previous: false, next: true, direction: 1, destination: 'm19' }
+]) test(`home navigation locates a library track across pages: ${id}, step ${direction}`, async () => {
+    const a = app({ realRender: true });
+    for (let n = 4; n <= 20; n++) a.tracks.push({ ...a.tracks[0], id: `m${n}`, name: `Track ${n}`, path: `/music/${n}.mp3`, createdAt: n });
+    a.context.window.HomeScene = { mount() {}, unmount() {} };
+    a.$('homePlayBtn').querySelector = () => new Element();
+    const homeSyncStart = source.indexOf('function syncHomePlayback()');
+    a.run(source.slice(homeSyncStart, source.indexOf('/* 唱片从最近添加', homeSyncStart)));
+    await a.run(`playMusic('${id}')`);
+    const playing = a.state.player.music;
+    a.$('barAudio').currentTime = 47;
+    assert.equal(playing.libraryPosition, undefined, 'get_music does not return a position in the home order');
+    await a.run("navigateToView('home')");
+    assert.equal(a.$('homePrevBtn').disabled, !previous);
+    assert.equal(a.$('homeNextBtn').disabled, !next);
+    assert.equal(a.state.player.music, playing);
+    assert.equal(a.$('barAudio').currentTime, 47);
+    assert.equal(a.$('barAudio').paused, false);
+    assert.equal(a.run('homeSelectedTrack().id'), id);
+    assert(a.run('homeTracks.length') <= 10, 'home keeps only the selected SQL page');
+    await a.$(direction > 0 ? 'homeNextBtn' : 'homePrevBtn').fire('click');
+    await tick();
+    assert.equal(a.state.player.music.id, destination);
+    assert.equal(a.$('barAudio').paused, false);
+});
+
+for (const status of ['recorded', 'unrecorded']) test(`clip navigation ignores the hidden movie filter and preserves the music choice: ${status}`, async () => {
+    const a = app({ realRender: true }); a.bind();
+    a.clips.push({ ...a.clips[0], id: 'c2', musicId: 'm2' });
+    a.movies.push({ id: 1, name: 'Movie' });
+    a.usages.push({ id: 1, movieId: 1, musicId: 'm1', createdAt: 1 });
+    const option = new Element(); option.dataset.movieUsageStatus = status;
+    await a.$('movieUsageMenu').fire('click', { target: option });
+    await a.run("navigateToView('clips')");
+    assert.equal(a.$('movieUsageControl').classList.contains('hidden'), true);
+    assert.equal(a.$('resultInfo').textContent, '2 个片段');
+    assert.match(a.$('contentArea').innerHTML, /data-clip-id="c1"/);
+    assert.match(a.$('contentArea').innerHTML, /data-clip-id="c2"/);
+    assert.equal(a.state.movieUsageStatus, status);
+    await a.run("navigateToView('all')");
+    assert.equal(a.$('movieUsageControl').classList.contains('hidden'), false);
+    assert.equal(a.$('resultInfo').textContent, status === 'recorded' ? '1 个音乐' : '2 个音乐');
+    assert.equal(a.calls.filter(c => c.command === 'query_library_page').at(-1).args.query.movieUsageStatus, status);
+    a.clips.splice(0);
+    await a.run("navigateToView('clips')");
+    assert.match(a.$('contentArea').innerHTML, /还没有音乐片段/);
+    assert.doesNotMatch(a.$('contentArea').innerHTML, /没有匹配结果|data-clear-library-filters/);
+});
+
 test('cancelling while one import write commits retains that item and leaves the rest pending', async () => {
     const started=deferred(),commit=deferred();
     const a=app({onInvoke:(cmd,args)=>{if(cmd==='create_music' && args.music.name==='X'){started.resolve();return commit.promise;}}});
