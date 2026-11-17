@@ -283,11 +283,11 @@ DMG 创建遇到 macOS 的 `Resource busy` 时最多尝试 3 次，间隔 2 秒�
 
 ### 数据模型
 
-数据库为 SQLite(文件 `library.db`,WAL 模式、外键开启)，当前开发结构的 schema 版本为 `4`。所有 `*_at` 时间字段均为毫秒时间戳(INTEGER)。
+数据库为 SQLite(文件 `library.db`,WAL 模式、外键开启)，当前 schema 版本为 `4`。所有 `*_at` 时间字段均为毫秒时间戳(INTEGER)。
 
 旧版 Tag 数据库首次升级时会先通过 SQLite 生成 `library.pre-tag-tree-v1.db` 完整备份；其他结构升级或失败后的再次升级使用唯一命名的 `library.pre-schema-4-*.db`，保留已有备份。全部结构与数据迁移在同一个事务中完成，关联校验通过后才提交。恢复旧应用必须先确认它能读取当前数据库，不自动回滚数据库，也不要直接用旧备份覆盖已经继续编辑过的库。程序检测到高于自身支持范围的 schema 版本时会停止写入。
 
-schema 4 新增电影及使用记录，升级时保留音乐、片段、Tag、候选、播放历史和音频。支持 schema 3 的旧客户端不能写入升级后的库；恢复旧应用前仍须通过数据库兼容性检查。应用版本暂保持 0.2.11，不因开发 schema 变更自动发布新版。
+schema 4 新增电影及使用记录，升级时保留音乐、片段、Tag、候选、播放历史和音频。支持 schema 3 的旧客户端不能写入升级后的库；恢复旧应用前仍须通过数据库兼容性检查。v0.2.12 首次发布 schema 4。
 
 **movies**：`id INTEGER PRIMARY KEY`、`name TEXT`、唯一的 `name_key TEXT`、`created_at / updated_at INTEGER`。`name_key` 仅用于片名查重，关联始终使用 `id`。
 
