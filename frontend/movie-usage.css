@@ -1,16 +1,24 @@
-.music-movie-summary { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:8px; font-size:11px; }
+.music-movie-summary { display:flex; align-items:center; flex-wrap:wrap; gap:6px 8px; margin-top:8px; font-size:11px; }
 .movie-summary-count, .movie-record-button { border:0; background:transparent; color:var(--primary); font:inherit; cursor:pointer; padding:3px 0; }
-.movie-summary-count { white-space:nowrap; }
+.movie-summary-count { flex-shrink:0; white-space:nowrap; color:var(--subtext); }
+.movie-summary-count:hover { color:var(--primary-strong); }
 .movie-record-button { margin-left:3px; white-space:nowrap; }
+/* List rows reserve the movie action space so hover never changes row height. */
+@media (hover:hover) and (pointer:fine) {
+    .music-card:not(:hover):not(:focus-within) .music-movie-summary.is-unrecorded { max-height:0; margin-top:0; overflow:hidden; }
+}
 .movie-dialog-hint { color:var(--subtext); }
-.movie-chip { display:inline-flex; align-items:center; gap:3px; min-width:0; max-width:150px; height:22px; padding:1px 4px; border:1px solid var(--movie-chip-border, var(--border-strong)); border-radius:4px; background:var(--movie-chip-bg, var(--panel)); color:var(--movie-chip-text, var(--text)); font:400 11px/1.2 var(--font-ui); }
+/* Grid keeps WebKit's intrinsic button width accurate: flex can round the title
+   width down and split even "cc" onto two lines. Long titles still wrap. */
+.movie-chip { display:inline-grid; grid-template-columns:13px minmax(0,1fr) 8px; flex:0 0 auto; align-items:center; gap:4px; box-sizing:border-box; width:max-content; min-width:0; max-width:100%; min-height:22px; padding:2px 6px; border:1px solid var(--movie-chip-border, var(--border-strong)); border-radius:4px; background:var(--movie-chip-bg, var(--panel)); color:var(--movie-chip-text, var(--text)); font:400 11px/16px var(--font-ui); text-align:left; transition:background .15s, border-color .15s; }
+.movie-chip:not(button) { grid-template-columns:13px minmax(0,1fr); }
 button.movie-chip { cursor:pointer; }
 button.movie-chip:hover { background:var(--movie-chip-hover, var(--primary-light)); }
 button.movie-chip:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
 button.movie-chip:disabled { opacity:.5; cursor:wait; }
-.movie-chip-icon { flex:0 0 13px; font:12px/1 "Apple Color Emoji", "Segoe UI Emoji", sans-serif; text-align:center; }
-.movie-chip-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.movie-chip-remove { flex:0 0 8px; color:inherit; opacity:.65; font:400 12px/1 var(--font-ui); }
+.movie-chip-icon { width:13px; height:13px; }
+.movie-chip-name { min-width:0; white-space:normal; overflow-wrap:break-word; }
+.movie-chip-remove { width:8px; color:inherit; opacity:.65; font:400 12px/1 var(--font-ui); text-align:center; }
 @media (hover:hover) and (pointer:fine) {
     .movie-chip-remove { opacity:0; }
     .movie-chip:is(:hover, :focus) .movie-chip-remove { opacity:1; }

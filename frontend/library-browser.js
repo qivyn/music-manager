@@ -121,7 +121,6 @@ function recentModeHTML() {
         <button class="recent-mode-btn ${state.recentMode === "used" ? "active" : ""}" data-recent-mode="used">最近播放</button></div>`;
 }
 async function render() {
-    closeCatalogMenu();
     const version = ++libraryRenderVersion;
     const current = () => version === libraryRenderVersion;
     const leavingHome = document.body.classList.contains("view-home") && state.currentView !== "home";

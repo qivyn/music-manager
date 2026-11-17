@@ -710,7 +710,7 @@ function renderInlineMusicTags(item) {
         `<optgroup label="${escapeHTML(category)}">${categoryTags.map(tag => `<option value="${tag.id}">#${escapeHTML(tag.path)}</option>`).join("")}</optgroup>`
     ).join("");
 
-    return `${tags}<span class="music-quick-actions"><button class="quick-tag-button" data-action="quick-tag" data-id="${item.id}" title="为这首音乐添加 Tag">＋ Tag</button><button type="button" class="movie-record-button" data-movie-action="add-movies" data-music-id="${escapeHTML(item.id)}" title="记录这首音乐用于哪些电影">＋ 影片</button></span>${editing ? `<span class="quick-tag-editor"><select data-quick-tag-select data-id="${item.id}" aria-label="选择已有 Tag"><option value="">选择已有 Tag</option>${options}</select><input data-quick-tag-input="${item.id}" type="text" placeholder="新 Tag，按 Enter" aria-label="输入新 Tag"><button data-action="quick-tag-save" data-id="${item.id}" title="保存新 Tag">添加</button></span>` : ""}`;
+    return `${tags}<span class="music-quick-actions"><button class="quick-tag-button" data-action="quick-tag" data-id="${item.id}" title="为这首音乐添加 Tag">＋ Tag</button></span>${editing ? `<span class="quick-tag-editor"><select data-quick-tag-select data-id="${item.id}" aria-label="选择已有 Tag"><option value="">选择已有 Tag</option>${options}</select><input data-quick-tag-input="${item.id}" type="text" placeholder="新 Tag，按 Enter" aria-label="输入新 Tag"><button data-action="quick-tag-save" data-id="${item.id}" title="保存新 Tag">添加</button></span>` : ""}`;
 }
 
 async function saveQuickTag(musicId, rawValue, tagId = null) {
@@ -1466,7 +1466,6 @@ function closeMusicContextPanels() {
 ========================================================= */
 
 function setupEvents() {
-    setupCatalogControls();
     setupMovieUsageEvents();
     setupClipEditorControls();
 
@@ -2266,7 +2265,6 @@ function setupEvents() {
         .addEventListener(
             "click",
             async event => {
-                if (handleCatalogMenuClick(event)) return;
                 if (event.target.closest("[data-back-album-directory]")) {
                     state.catalogSelection = null;
                     await render();restoreDirectoryScroll("albums");return;
@@ -3224,7 +3222,7 @@ function setupSpatialMotion() {
     document.addEventListener("pointermove", event => {
         pointerX = event.clientX;
         pointerY = event.clientY;
-        const nextSurface = event.target.closest(".music-card, .music-row, .album-card, .clip-library-row");
+        const nextSurface = event.target.closest(".music-card, .album-card, .clip-library-row");
         if (nextSurface !== activeSurface) {
             activeSurface?.classList.remove("is-pointer-lit");
             activeSurface?.style.removeProperty("--tilt-x");

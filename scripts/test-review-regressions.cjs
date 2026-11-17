@@ -1506,13 +1506,49 @@ test('cancelling a detail tag confirmation keeps its tag and live input draft', 
     assert(!a.calls.some(c=>c.command==='update_music'));
 });
 
+test('music row hover does not activate spatial motion or disturb other surfaces', async () => {
+    const a=app();
+    a.context.window.innerWidth=1200;a.context.window.innerHeight=800;
+    a.context.document.documentElement=new Element();
+    const frames=[];a.context.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
+    const card=new Element();card.classList.add('music-card');
+    card.getBoundingClientRect=()=>({left:0,top:0,width:200,height:200});
+    const row=new Element();row.classList.add('music-row');
+    row.getBoundingClientRect=()=>{throw Error('Music rows must not be measured for tilt');};
+    const icon=new Element();icon.parentElement=row;
+    a.run('setupSpatialMotion()');
+    await a.context.document.fire('pointermove',{target:card,clientX:20,clientY:20});frames.shift()();
+    assert(card.classList.contains('is-pointer-lit'));
+    await a.context.document.fire('pointermove',{target:icon,clientX:40,clientY:40});frames.shift()();
+    assert.equal(row.classList.contains('is-pointer-lit'),false);
+    assert.equal(card.classList.contains('is-pointer-lit'),false);
+});
+
 function movieDialogAction(action) { const button=new Element();button.dataset.movieDialogAction=action;return button; }
 function movieChoice(id,checked=true) { const input=new Element();input.dataset.movieChoice=String(id);input.checked=checked;return input; }
 function seedMovies(a,count=35) { for(let i=1;i<=count;i++)a.movies.push({id:i,name:`Film ${String(i).padStart(3,'0')}`,createdAt:i,updatedAt:i}); }
 
-test('unrecorded music leaves no movie summary placeholder', () => {
-    const a = app();
-    assert.equal(a.run("renderMovieSummary({ id: 'm1', movieCount: 0, moviePreview: [] })"), '');
+for (const scenario of [
+    { view: 'all', layout: 'list', recorded: false },
+    { view: 'all', layout: 'list', recorded: true },
+    { view: 'all', layout: 'grid', recorded: true },
+    { view: 'movies', layout: 'list', recorded: true }
+]) test(`movie quick-add stays in its own row: ${JSON.stringify(scenario)}`, async () => {
+    const a=app({realRender:true});a.bind();seedMovies(a,2);
+    if(scenario.recorded)a.usages.push({id:1,musicId:'m1',movieId:1,note:'',createdAt:1,updatedAt:1});
+    a.state.currentView=scenario.view;a.state.layout=scenario.layout;
+    if(scenario.view==='movies')a.state.selectedMovieId=1;
+    await a.run('render()');
+    assert.doesNotMatch(a.run("renderInlineMusicTags({id:'m1',tags:[],tagIds:[]})"),/data-movie-action/);
+    const summaries=[...a.$('contentArea').innerHTML.matchAll(/<div class="music-movie-summary[^\"]*">([\s\S]*?)<\/div>/g)];
+    const summary=summaries.find(([,html])=>html.includes('data-music-id="m1"'))?.[1];
+    assert(summary, 'The movie row keeps an add-movies entry even before the first association');
+    assert.doesNotMatch(summary,/data-action="quick-tag"|0 部电影|暂无/);
+    if(!scenario.recorded)assert.doesNotMatch(summary,/class="movie-chip"/);
+    const button=renderedAction(summary,'data-movie-action','add-movies','data-music-id','m1');
+    await a.$('contentArea').fire('click',{target:button});
+    assert.equal(a.run('movieDialog.mode'),'movies');assert.equal(a.run('movieDialog.id'),'m1');
+    assert.equal(a.state.player.music,null);
 });
 
 test('album directory requests only its SQL page; details and back preserve directory search, page and playback', async () => {
@@ -1768,61 +1804,51 @@ test('usage dropdown supports arrow keys, checked options, Escape and outside di
     assert.equal(a.$('movieUsageMenu').classList.contains('hidden'),true);
 });
 
-function catalogMenuFixture(a, kind, id) {
-    const container = new Element();container.classList.add('catalog-actions');
-    const trigger = new Element();trigger.dataset.catalogMenu='test-catalog-menu';trigger.parentElement=container;trigger.isConnected=true;
-    const menu = a.$('test-catalog-menu');menu.classList.add('catalog-menu','hidden');menu.parentElement=container;
-    const items = (kind==='movie'?['rename','delete-movie']:['delete-album']).map(action=>{
-        const item=new Element();item.classList.add('settings-action');item.parentElement=menu;
-        if(kind==='movie'){item.dataset.movieAction=action;item.dataset.movieId=String(id);}else item.dataset.deleteAlbum=id;
-        item.focus=()=>{a.context.document.activeElement=item;};return item;
-    });
-    trigger.focus=()=>{a.context.document.activeElement=trigger;};
-    container.contains=target=>target?.closest('.catalog-actions')===container;
-    menu.contains=target=>target?.closest('.catalog-menu')===menu;
-    menu.querySelectorAll=()=>items;
-    a.context.window.innerHeight=600;
-    trigger.getBoundingClientRect=()=>({bottom:570});menu.getBoundingClientRect=()=>({height:90});
-    return {trigger,menu,container,items};
+function renderedAction(html, attribute, action, idAttribute = null, id = null) {
+    const markup = [...html.matchAll(/<button\b([^>]*)>/g)].find(([, attrs]) =>
+        attrs.includes(`${attribute}="${action}"`) && (!idAttribute || attrs.includes(`${idAttribute}="${id}"`)));
+    assert(markup, `Missing visible action ${action} for ${id}`);
+    assert.doesNotMatch(markup[1], /role="menuitem"|tabindex="-1"/);
+    const button = new Element();
+    for (const [, key, value] of markup[1].matchAll(/data-([a-z-]+)="([^\"]*)"/g)) {
+        button.dataset[key.replace(/-([a-z])/g, (_, ch) => ch.toUpperCase())] = value;
+    }
+    return button;
 }
 
-test('catalog overflow menu supports keyboard, upward placement and dismissal without navigating or querying', async () => {
-    const a=app();a.bind();a.state.currentView='movies';a.state.pages['movies:groups']=3;
-    const {trigger,menu,container,items}=catalogMenuFixture(a,'movie',1);
-    await a.$('contentArea').fire('click',{target:trigger});
-    assert.equal(menu.classList.contains('hidden'),false);assert.equal(trigger.getAttribute('aria-expanded'),'true');
-    assert.equal(container.classList.contains('opens-up'),true);assert.equal(a.context.document.activeElement,items[0]);
-    assert.equal(a.state.selectedMovieId,null);assert.equal(a.state.pages['movies:groups'],3);
-    assert(!a.calls.some(c=>c.command==='query_library_page'));
-    await a.$('contentArea').fire('keydown',{target:items[0],key:'ArrowDown'});assert.equal(a.context.document.activeElement,items[1]);
-    await a.$('contentArea').fire('keydown',{target:items[1],key:'Escape'});
-    assert.equal(menu.classList.contains('hidden'),true);assert.equal(a.context.document.activeElement,trigger);
-    await a.$('contentArea').fire('keydown',{target:trigger,key:'ArrowUp'});assert.equal(a.context.document.activeElement,items[1]);
-    await a.context.document.fire('click',{target:new Element()});assert.equal(menu.classList.contains('hidden'),true);
-    await a.$('contentArea').fire('click',{target:trigger});
-    await a.$('contentArea').fire('focusout',{relatedTarget:new Element()});assert.equal(menu.classList.contains('hidden'),true);
+for (const confirmed of [true, false]) test(`movie inline actions preserve identity and deletion confirmation=${confirmed}`, async () => {
+    const a=app({confirmed,realRender:true});a.bind();seedMovies(a,2);a.state.currentView='movies';
+    await a.run('render()');
+    const html=a.$('contentArea').innerHTML;
+    assert.doesNotMatch(html,/data-catalog-menu|role="menu"/);
+    const rename=renderedAction(html,'data-movie-action','rename','data-movie-id',2);
+    await a.$('contentArea').fire('click',{target:rename});
+    assert.equal(a.run('movieDialog.id'),2);assert.equal(a.$('movieDialogName').value,'Film 002');
+    assert.equal(a.state.selectedMovieId,null);assert.equal(a.state.player.music,null);
+    a.$('movieDialogName').value='Renamed movie';await a.run('saveMovieDialog()');
+    assert.equal(a.movies.find(movie=>movie.id===2).name,'Renamed movie');
+    const remove=renderedAction(a.$('contentArea').innerHTML,'data-movie-action','delete-movie','data-movie-id',2);
+    await a.$('contentArea').fire('click',{target:remove});
+    assert.equal(a.movies.length,confirmed?1:2);assert.equal(a.movies[0].id,1);
+    assert.equal(a.tracks.length,3);assert.equal(a.state.player.music,null);
 });
 
-test('movie overflow actions keep the exact movie identity and preserve deletion confirmation', async () => {
-    const a=app({confirmed:false});a.bind();seedMovies(a,2);a.state.currentView='movies';
-    let {trigger,menu,items}=catalogMenuFixture(a,'movie',2);
-    await a.$('contentArea').fire('click',{target:trigger});
-    await a.$('contentArea').fire('click',{target:items[0]});
-    assert.equal(menu.classList.contains('hidden'),true);assert.equal(a.run('movieDialog.id'),2);
-    assert.equal(a.$('movieDialogName').value,'Film 002');assert.equal(a.state.selectedMovieId,null);
-    a.run('closeMovieDialog()');
-    await a.$('contentArea').fire('click',{target:trigger});
-    await a.$('contentArea').fire('click',{target:items[1]});
-    assert.equal(a.movies.length,2);assert(!a.calls.some(c=>c.command==='delete_movie'));
-});
-
-test('album overflow menu cancellation leaves music untouched and does not open the album', async () => {
-    const a=app({confirmed:false});a.bind();a.state.currentView='albums';
-    const {trigger,items}=catalogMenuFixture(a,'album','A');
-    await a.$('contentArea').fire('click',{target:trigger});await a.$('contentArea').fire('click',{target:items[0]});
-    assert.equal(a.state.catalogSelection,null);assert.equal(a.tracks.length,3);
-    assert(!a.calls.some(c=>c.command==='delete_music_batch'));
-});
+for (const detail of [false, true]) for (const confirmed of [false, true]) {
+    test(`album inline deletion preserves identity and confirmation=${confirmed} in detail=${detail}`, async () => {
+        const a=app({confirmed,realRender:true});a.bind();a.state.currentView='albums';
+        a.tracks[2].album='B';a.state.catalogSelection=detail?'A':null;
+        await a.run('render()');
+        const html=a.$('contentArea').innerHTML;
+        assert.doesNotMatch(html,/data-catalog-menu|role="menu"/);
+        const remove=renderedAction(html,'data-delete-album','A');
+        await a.$('contentArea').fire('click',{target:remove});
+        assert.equal(a.state.catalogSelection,confirmed?null:(detail?'A':null));
+        assert.equal(a.state.player.music,null);
+        assert.deepEqual(a.tracks.map(track=>track.id),confirmed?['m3']:['m1','m2','m3']);
+        assert.equal(a.calls.filter(call=>call.command==='delete_music_batch').length,confirmed?1:0);
+        assert.doesNotMatch(a.run('catalogActionsHTML("album", {key:""})'),/data-delete-album/);
+    });
+}
 
 test('catalog toolbar creates movies in the directory and adds music for the selected movie', async () => {
     const a=app();a.bind();seedMovies(a,2);a.state.currentView='movies';

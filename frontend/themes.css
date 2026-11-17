@@ -23,10 +23,10 @@ body[data-theme="cream"] {
     --ring: #96677526;
     --tag: #e9dfe9;
     --tag-text: #705b76;
-    --movie-chip-bg: #ffffff;
-    --movie-chip-border: #d7dce3;
-    --movie-chip-text: #3d424c;
-    --movie-chip-hover: #f3f5f8;
+    --movie-chip-bg: #f0e6d6;
+    --movie-chip-border: #dac8ab;
+    --movie-chip-text: #795d36;
+    --movie-chip-hover: #e9dcc5;
     --danger: #9d484e;
     --danger-soft: #f3e1df;
     --warning: #82612f;
@@ -71,10 +71,10 @@ body[data-theme="night"] {
     --ring: #efcfb61f;
     --tag: #635d7b;
     --tag-text: #f4e4ee;
-    --movie-chip-bg: #ffffff;
-    --movie-chip-border: #d7dce3;
-    --movie-chip-text: #3d424c;
-    --movie-chip-hover: #f3f5f8;
+    --movie-chip-bg: #525d76;
+    --movie-chip-border: #7f8291;
+    --movie-chip-text: #f1d7ae;
+    --movie-chip-hover: #606981;
     --danger: #ffd1d5;
     --danger-soft: #72545e;
     --warning: #f5e0bb;
@@ -128,7 +128,7 @@ body:is([data-theme="cream"], [data-theme="night"]) .page-header h1 { font-weigh
 body:is([data-theme="cream"], [data-theme="night"]) .result-info { color: var(--subtext); padding: 6px 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 99px; font-weight: 500; }
 body:is([data-theme="cream"], [data-theme="night"]) .result-info::before { display: none; }
 body:is([data-theme="cream"], [data-theme="night"]) .brand-icon { color: var(--primary-strong); background: var(--primary-light); border-color: var(--primary-soft); box-shadow: none; text-shadow: none; }
-body:is([data-theme="cream"], [data-theme="night"]) :is(.brand-icon::before, .brand-icon::after, .topbar .primary-btn::after, .music-list::after) { display: none; }
+body:is([data-theme="cream"], [data-theme="night"]) :is(.brand-icon::before, .brand-icon::after, .topbar .primary-btn::after) { display: none; }
 
 /* Navigation and tag tree retain visible hierarchy in both palettes. */
 body:is([data-theme="cream"], [data-theme="night"]) .top-nav .nav-item { color: var(--subtext); font-weight: 500; }

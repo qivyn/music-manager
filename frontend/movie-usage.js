@@ -19,13 +19,13 @@ function movieNameKey(name) {
 
 function renderMovieSummary(music) {
     const count = Number(music.movieCount) || 0;
-    if (!count) return "";
-    const title = name => `<span class="movie-chip-icon" aria-hidden="true">🎬</span><span class="movie-chip-name">${escapeHTML(name)}</span>`;
+    const title = name => `<svg class="movie-chip-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h14v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8Z"/><path d="m3 8-.7-3.8 13.8-2.4.7 3.8L3 8Z"/><path d="m6 3.6 2.4 3.5m2.5-4.3 2.4 3.5M7 12h6"/></svg><span class="movie-chip-name">${escapeHTML(name)}</span>`;
     const labels = (music.moviePreview || []).map(movie => Number.isInteger(movie.usageId)
         ? `<button type="button" class="movie-chip" data-movie-action="remove-summary" data-usage-id="${movie.usageId}" data-music-name="${escapeHTML(music.name)}" data-movie-name="${escapeHTML(movie.name)}" title="移除《${escapeHTML(movie.name)}》的使用记录" aria-label="移除《${escapeHTML(movie.name)}》的使用记录" ${pendingMovieUsageDeletes.has(movie.usageId) ? "disabled" : ""}>${title(movie.name)}<span class="movie-chip-remove" aria-hidden="true">×</span></button>`
         : `<span class="movie-chip">${title(movie.name)}</span>`).join("");
-    return `<div class="music-movie-summary">
-        <button type="button" class="movie-summary-count" data-movie-action="show-usages" data-music-id="${escapeHTML(music.id)}">${count} 部电影</button>${labels}${count > 2 ? `<button type="button" class="movie-summary-count" data-movie-action="show-usages" data-music-id="${escapeHTML(music.id)}">＋${count - 2} 部</button>` : ""}
+    return `<div class="music-movie-summary${count ? "" : " is-unrecorded"}">
+        ${labels}${count > 2 ? `<button type="button" class="movie-summary-count" data-movie-action="show-usages" data-music-id="${escapeHTML(music.id)}">＋${count - 2} 部</button>` : ""}
+        <span class="music-quick-actions"><button type="button" class="movie-record-button" data-movie-action="add-movies" data-music-id="${escapeHTML(music.id)}" title="记录这首音乐用于哪些电影">＋ 影片</button></span>
     </div>`;
 }
 
@@ -50,7 +50,7 @@ async function renderMoviesView(isCurrent) {
         cacheMovieUsages("catalog", []);
         visibleQueueMusic = []; visibleClipIds = [];
         $("resultInfo").textContent = `${groups.total} 部电影`;
-        $("contentArea").innerHTML = `<section class="catalog-directory" aria-label="电影目录">
+        $("contentArea").innerHTML = `<section class="catalog-directory movie-directory" aria-label="电影目录">
             <div class="catalog-directory-columns" aria-hidden="true"><span>电影名称</span><span>音乐数量</span><span></span></div>
             <div class="catalog-directory-list">${groups.items.map(movie => `<div class="catalog-directory-row"><button type="button" class="catalog-directory-open" data-movie-action="select-movie" data-movie-id="${movie.id}" title="${escapeHTML(movie.name)}"><span class="catalog-directory-icon" aria-hidden="true">▣</span><span class="catalog-directory-name">${escapeHTML(movie.name)}</span><span class="catalog-directory-count">${movie.musicCount} 首</span></button>${catalogActionsHTML("movie", movie)}</div>`).join("")
                 || `<div class="empty-state"><div class="empty-title">${state.movieSearch ? "没有匹配的电影" : "还没有电影"}</div><div class="empty-description">${state.movieSearch ? "换一个片名，或清除搜索" : "新建电影后，可以在详情中添加音乐"}</div></div>`}</div>
@@ -78,6 +78,7 @@ async function renderMoviesView(isCurrent) {
         <div class="music-icon">${musicArtwork(music)}</div>
         <div class="music-main"><div class="music-name">${escapeHTML(music.name)}</div><div class="music-meta"><span>${escapeHTML(music.album || "未设置专辑")}</span><span>${formatTime(music.duration)}</span></div>
             <div class="music-tags">${renderInlineMusicTags(music)}</div>
+            ${renderMovieSummary(music)}
             <div class="movie-usage-note">${escapeHTML(music.movieUsageNote || "未填写使用备注")}</div>
             <div class="movie-usage-actions"><button type="button" class="text-btn" data-movie-action="edit-note" data-usage-id="${music.movieUsageId}">编辑备注</button><button type="button" class="text-btn" data-movie-action="remove-usage" data-usage-id="${music.movieUsageId}">移除关联</button></div>
         </div><div class="music-actions"><button type="button" class="icon-action" data-action="play" data-id="${escapeHTML(music.id)}" title="试听">▶</button><button type="button" class="icon-action info-strong" data-action="info" data-id="${escapeHTML(music.id)}" title="音乐详情">ⓘ</button></div>
